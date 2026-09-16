@@ -24,9 +24,9 @@ export const typography = {
   body: { fontSize: 17, fontWeight: '400', letterSpacing: -0.1, color: colors.textSecondary, lineHeight: 24 },
   bodyMedium: { fontSize: 17, fontWeight: '500', letterSpacing: -0.1, color: colors.textPrimary, lineHeight: 24 },
   caption: { fontSize: 12, fontWeight: '700', letterSpacing: 1.2, color: colors.textTertiary, textTransform: 'uppercase' },
-};
+} satisfies Record<string, TextStyle>;
 
-import { Platform } from 'react-native';
+import { Platform, type TextStyle } from 'react-native';
 
 export const shadows = {
   sm: { boxShadow: '0px 2px 8px rgba(0,0,0,0.04)', elevation: 1 } as any,

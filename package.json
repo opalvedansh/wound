@@ -2,7 +2,10 @@
   "name": "@antigravity-project-spec-pack/source",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
+  "scripts": {
+    "typecheck": "tsc -p apps/api/tsconfig.app.json --noEmit && tsc -p apps/api/tsconfig.spec.json --noEmit && tsc -p apps/api-e2e/tsconfig.spec.json --noEmit && tsc -p apps/web/tsconfig.json --noEmit && tsc -p apps/mobile/tsconfig.app.json --noEmit && tsc -p packages/domain/tsconfig.lib.json --noEmit && tsc -p packages/domain/tsconfig.spec.json --noEmit",
+    "test:api": "nx test api"
+  },
   "private": true,
   "devDependencies": {
     "@expo/cli": "~56.1.14",
@@ -74,11 +77,15 @@
     "expo-splash-screen": "~56.0.10",
     "expo-status-bar": "~56.0.4",
     "expo-system-ui": "~56.0.5",
+    "jose": "6.2.12",
     "lucide-react": "^1.41.0",
     "motion": "^13.2.0",
+    "nestjs-pino": "5.2.0",
     "next": "~16.1.6",
     "pdfmake": "^0.3.11",
     "pg": "^8.23.0",
+    "pino": "10.3.1",
+    "pino-http": "11.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-native": "0.85.3",
@@ -88,6 +95,7 @@
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0",
     "tailwind-merge": "^3.6.0",
+    "zod": "4.6.5",
     "zustand": "^5.0.15"
   }
 }
