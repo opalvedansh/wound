@@ -101,6 +101,8 @@ const syncItem = async (item: OutboxItem): Promise<{ success: boolean; conflict?
         if (frontendPayload.therapy.nextVisitDate) {
            dbPayload.nextVisit = frontendPayload.therapy.nextVisitDate;
         }
+        // Answers to care questions an admin added, each with the question as it was asked.
+        dbPayload.careResponses = frontendPayload.therapy.responses ?? null;
       }
       
       // Upsert the Treatment first
@@ -134,6 +136,7 @@ const syncItem = async (item: OutboxItem): Promise<{ success: boolean; conflict?
              painLevel: frontendPayload.assessment.pain || 0,
              edgeCondition: frontendPayload.assessment.edgeCondition || null,
              periwoundCondition: frontendPayload.assessment.periwoundCondition || null,
+             responses: frontendPayload.assessment.responses ?? null,
              updatedAt: new Date().toISOString()
           };
           await supabase.from('ClinicalAssessment').upsert(assessmentPayload);

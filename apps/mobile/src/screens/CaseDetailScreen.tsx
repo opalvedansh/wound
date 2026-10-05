@@ -1,442 +1,629 @@
-import React from 'react';
-import { View, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } from 'react-native';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import { Text } from '../components/Typography';
-import { colors, spacing } from '../lib/theme';
+import React, { useMemo, useState } from 'react';
+import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
+import type { Treatment } from '@antigravity-project-spec-pack/domain';
+import { ActionButton } from '../components/ActionButton';
+import { FactStrip, type Fact } from '../components/FactStrip';
+import { JourneyTrack } from '../components/JourneyTrack';
+import { SyncLabel } from '../components/SyncLabel';
+import { Text } from '../components/Typography';
+import {
+  CASE_STATUS,
+  TREND_COLOR,
+  calendarDate,
+  dayDiff,
+  parseDate,
+  parseDay,
+  sentenceCase,
+  timeAgo,
+} from '../lib/format';
+import { focusStyles, interactionStyle } from '../lib/interaction';
+import { syncIssueFor, useStalledSync } from '../lib/syncStatus';
+import { colors, radii, spacing } from '../lib/theme';
 import { useVisitStore } from '../store/useVisitStore';
 
 type ParamList = {
   CaseDetail: { caseId: string };
 };
 
+type Phase = 'pre' | 'post';
+type FeatherName = React.ComponentProps<typeof Feather>['name'];
+
+const CONTENT_MAX_WIDTH = 680;
+const RAIL_WIDTH = 20;
+// Puts the timeline node's centre on the first line of the treatment title.
+const NODE_OFFSET = 20;
+
+const PHASE_LABEL: Record<Phase, string> = {
+  pre: 'Pre-treatment',
+  post: 'Post-treatment',
+};
+
+const tone = {
+  body: '#374151',
+  node: '#C3C8CF',
+  rail: '#D9DDE2',
+  tile: '#F1F3F5',
+};
+
+interface NextStep {
+  title: string;
+  body: string;
+  label: string;
+  icon: FeatherName;
+  onPress: () => void;
+}
+
 export const CaseDetailScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'CaseDetail'>>();
+  const insets = useSafeAreaInsets();
   const caseId = route.params?.caseId;
 
-  const woundCase = useVisitStore((state) => state.cases.find(c => c.id === caseId));
+  const woundCase = useVisitStore((state) => state.cases.find((c) => c.id === caseId));
+  const patient = useVisitStore((state) => state.patients.find((p) => p.id === woundCase?.patientId));
   const allTreatments = useVisitStore((state) => state.treatments);
-  const treatments = allTreatments.filter(t => t.caseId === caseId).sort((a,b) => a.sequenceNumber - b.sequenceNumber);
   const addTreatment = useVisitStore((state) => state.addTreatment);
-  
+  const stalled = useStalledSync();
+
+  const treatments = useMemo(
+    () => allTreatments.filter((t) => t.caseId === caseId).sort((a, b) => a.sequenceNumber - b.sequenceNumber),
+    [allTreatments, caseId],
+  );
+
+  const backButton = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+      hitSlop={6}
+      onPress={() => navigation.goBack()}
+      style={(state) => [styles.iconButton, interactionStyle(state, styles.iconButtonHover, styles.iconButtonPressed)]}
+    >
+      <Feather name="chevron-left" size={20} color={colors.textPrimary} />
+    </Pressable>
+  );
+
   if (!woundCase) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.navBar}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton}>
-            <Feather name="arrow-left" size={24} color="#111827" />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.emptyState}>
-          <Text variant="h3" style={{ color: '#111827' }}>Case not found</Text>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <View style={styles.page}>
+          <View style={styles.column}>
+            <View style={styles.topBar}>{backButton}</View>
+            <View style={styles.notFound}>
+              <Text style={styles.emptyTitle}>Case not found</Text>
+              <Text style={styles.emptyBody}>This case isn't on this device.</Text>
+            </View>
+          </View>
         </View>
       </SafeAreaView>
     );
   }
 
-  const hasBaseline = treatments.length > 0;
-  
-  const handleStartVisit = () => {
-    const newTreatmentId = addTreatment(caseId);
-    navigation.navigate('Camera', { treatmentId: newTreatmentId, step: 'pre' });
+  const now = new Date();
+  const latest = treatments[treatments.length - 1];
+  const trend = latest?.assessment?.woundAppearanceTrend;
+  const woundType = [...treatments].reverse().find((t) => t.assessment?.woundType)?.assessment?.woundType;
+  const onset = parseDay(woundCase.onsetDate);
+  const lastVisit = parseDate(latest?.createdAt);
+  const facts: Fact[] = [
+    {
+      label: 'Status',
+      value: CASE_STATUS[woundCase.status],
+      detail: trend,
+      detailColor: trend ? TREND_COLOR[trend] : undefined,
+      flex: 1.3,
+    },
+    {
+      label: 'Onset',
+      value: onset ? calendarDate(onset, now) : woundCase.onsetDate || 'Not recorded',
+      detail: onset ? timeAgo(onset, now) : undefined,
+    },
+    {
+      label: 'Last visit',
+      value: lastVisit ? calendarDate(lastVisit, now) : 'None yet',
+      detail: lastVisit ? timeAgo(lastVisit, now) : undefined,
+    },
+  ];
+
+  const startTreatment = () => {
+    const treatmentId = addTreatment(woundCase.id);
+    navigation.navigate('Camera', { treatmentId, step: 'pre' });
   };
 
+  const openTreatment = (t: Treatment) => {
+    if (t.phase === 'PRE') navigation.navigate('Camera', { treatmentId: t.id, step: 'pre' });
+    else if (t.phase === 'POST') navigation.navigate('Camera', { treatmentId: t.id, step: 'post' });
+    else navigation.navigate('TreatmentDetail', { treatmentId: t.id });
+  };
+
+  // An open treatment is resumed rather than starting another one alongside it.
+  const nextStep = ((): NextStep | null => {
+    if (!latest) return null;
+    const n = latest.sequenceNumber;
+    if (latest.phase !== 'COMPLETED') {
+      const phase: Phase = latest.phase === 'PRE' ? 'pre' : 'post';
+      return {
+        title: `Treatment ${n} in progress`,
+        body: `${PHASE_LABEL[phase]} images are due.`,
+        label: `Capture ${PHASE_LABEL[phase].toLowerCase()} images`,
+        icon: 'camera',
+        onPress: () => openTreatment(latest),
+      };
+    }
+    const nextVisit = parseDate(latest.therapy?.nextVisitDate);
+    return {
+      title: `Treatment ${n} complete`,
+      body:
+        nextVisit && dayDiff(now, nextVisit) >= 0
+          ? `Next visit planned for ${calendarDate(nextVisit, now)}.`
+          : 'Start the next treatment when the patient returns.',
+      label: `Start treatment ${n + 1}`,
+      icon: 'plus',
+      onPress: startTreatment,
+    };
+  })();
+
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.navBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton}>
-          <Feather name="arrow-left" size={24} color="#111827" />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.iconButton}>
-          <Feather name="more-horizontal" size={24} color="#111827" />
-        </TouchableOpacity>
-      </View>
-      
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        <View style={styles.headerGroup}>
-          <View style={styles.badgeRow}>
-            <View style={styles.caseBadge}>
-              <Text style={styles.caseBadgeText}>ID: {woundCase.id.toUpperCase()}</Text>
-            </View>
-            <View style={styles.dateBadge}>
-              <Feather name="calendar" size={12} color="#4B5563" />
-              <Text style={styles.dateBadgeText}>{woundCase.onsetDate}</Text>
-            </View>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      <ScrollView
+        contentContainerStyle={[styles.page, { paddingBottom: insets.bottom + spacing.xxl }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.column}>
+          <View style={styles.topBar}>
+            {backButton}
+            <SyncLabel state={syncIssueFor(woundCase.id, woundCase.syncState, stalled.ids) ?? 'synced'} />
           </View>
-          <Text style={styles.titleText}>{woundCase.woundLocation}</Text>
-        </View>
-        
-        {!hasBaseline ? (
-          <View style={styles.baselineCard}>
-            <View style={styles.baselineIconContainer}>
-              <Feather name="file-text" size={24} color="#111827" />
-            </View>
-            <Text style={styles.baselineTitle}>Initial Assessment Required</Text>
-            <Text style={styles.baselineDesc}>
-              Please complete the baseline clinical assessment to begin tracking this wound's progression.
+
+          {patient && (
+            <Text style={styles.context}>
+              <Text style={styles.contextName}>{`${patient.firstName} ${patient.lastName}`.trim()}</Text>, ID{' '}
+              {patient.patientId}
             </Text>
-            <TouchableOpacity style={styles.primaryButton} onPress={handleStartVisit}>
-              <Text style={styles.primaryButtonText}>Start Baseline Visit</Text>
-              <Feather name="arrow-right" size={18} color="#FFFFFF" />
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <>
-            <View style={styles.metricsContainer}>
-              <View style={styles.metricBlock}>
-                <View style={styles.metricLabelRow}>
-                  <Feather name="activity" size={14} color="#9CA3AF" style={{marginRight: 4}} />
-                  <Text style={styles.metricLabel}>WOUND TYPE</Text>
+          )}
+          <Text variant="h2" style={styles.title} accessibilityRole="header">
+            {sentenceCase(woundCase.woundLocation) || 'Location not recorded'}
+          </Text>
+          <Text style={[styles.woundType, woundType === undefined && styles.woundTypeMissing]}>
+            {woundType ?? 'Wound type not recorded yet'}
+          </Text>
+
+          <FactStrip facts={facts} style={styles.facts} />
+
+          {nextStep === null ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyTitle}>No treatments yet</Text>
+              <Text style={styles.emptyBody}>The baseline visit starts treatment 1.</Text>
+              <JourneyTrack current={2} style={styles.journey} />
+              <Text style={styles.journeyNote}>Each treatment records pre-treatment and post-treatment images.</Text>
+              <View style={styles.action}>
+                <ActionButton label="Start baseline visit" icon="camera" onPress={startTreatment} />
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.nextStep}>
+                <Text style={styles.nextTitle}>{nextStep.title}</Text>
+                <Text style={styles.nextBody}>{nextStep.body}</Text>
+                <View style={[styles.action, styles.nextAction]}>
+                  <ActionButton label={nextStep.label} icon={nextStep.icon} onPress={nextStep.onPress} />
                 </View>
-                <Text style={styles.metricValue}>
-                  {treatments[0].assessment?.woundType || 'Pending'}
+              </View>
+
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle} accessibilityRole="header">
+                  Treatments
                 </Text>
+                <Text style={styles.sectionCount}>{treatments.length}</Text>
               </View>
-              <View style={styles.metricDivider} />
-              <View style={styles.metricBlock}>
-                <View style={styles.metricLabelRow}>
-                  <Feather name="target" size={14} color="#9CA3AF" style={{marginRight: 4}} />
-                  <Text style={styles.metricLabel}>PAIN LEVEL</Text>
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
-                  <Text style={[styles.metricValue, treatments[0].assessment?.pain! > 5 && { color: '#EF4444' }]}>
-                    {treatments[0].assessment?.pain ?? '--'}
-                  </Text>
-                  <Text style={styles.metricSubValue}> / 10</Text>
-                </View>
+              <View style={styles.timeline}>
+                {treatments.map((t, i) => (
+                  <TreatmentRow
+                    key={t.id}
+                    treatment={t}
+                    previousDone={i > 0 && treatments[i - 1].phase === 'COMPLETED'}
+                    isFirst={i === 0}
+                    isLast={i === treatments.length - 1}
+                    now={now}
+                    onPress={() => openTreatment(t)}
+                  />
+                ))}
               </View>
-            </View>
-
-            <View style={styles.timelineSection}>
-              <Text style={styles.sectionTitle}>Treatment History</Text>
-              
-              <View style={styles.timelineContainer}>
-                {treatments.map((t, index) => {
-                  const isLast = index === treatments.length - 1;
-                  const isCompleted = t.phase === 'COMPLETED';
-                  
-                  return (
-                    <View key={t.id} style={styles.timelineRow}>
-                      {/* Timeline Graphic */}
-                      <View style={styles.timelineGraphic}>
-                        <View style={[styles.timelineDot, isCompleted && styles.timelineDotCompleted]} />
-                        {!isLast && <View style={[styles.timelineLine, isCompleted && styles.timelineLineCompleted]} />}
-                      </View>
-                      
-                      {/* Timeline Content */}
-                      <TouchableOpacity 
-                        activeOpacity={0.7}
-                        style={styles.timelineCard}
-                        onPress={() => {
-                          if (t.phase === 'PRE') navigation.navigate('Camera', { treatmentId: t.id, step: 'pre' });
-                          else if (t.phase === 'POST') navigation.navigate('Camera', { treatmentId: t.id, step: 'post' });
-                          else navigation.navigate('TreatmentDetail', { treatmentId: t.id });
-                        }}
-                      >
-                        <View style={styles.timelineCardHeader}>
-                          <Text style={styles.timelineCardTitle}>
-                            T{t.sequenceNumber} <Text style={{fontWeight: '400', color: '#6B7280'}}>• {index === 0 ? 'Baseline' : 'Follow-up'}</Text>
-                          </Text>
-                          <View style={[styles.statusPill, isCompleted ? styles.statusPillCompleted : styles.statusPillActive]}>
-                            <Text style={[styles.statusPillText, isCompleted ? styles.statusTextCompleted : styles.statusTextActive]}>
-                              {isCompleted ? 'COMPLETED' : t.phase}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.timelineCardDesc}>
-                          {isCompleted ? 'Review clinical notes and captured imagery.' : 'Tap to continue the active assessment.'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-
-            <View style={styles.footerAction}>
-              <TouchableOpacity style={styles.primaryButton} onPress={handleStartVisit}>
-                <Feather name="plus" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-                <Text style={styles.primaryButtonText}>New Assessment (T{treatments.length + 1})</Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
+            </>
+          )}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 };
 
+const TreatmentRow = ({
+  treatment: t,
+  previousDone,
+  isFirst,
+  isLast,
+  now,
+  onPress,
+}: {
+  treatment: Treatment;
+  previousDone: boolean;
+  isFirst: boolean;
+  isLast: boolean;
+  now: Date;
+  onPress: () => void;
+}) => {
+  const done = t.phase === 'COMPLETED';
+  const started = parseDate(t.createdAt);
+  const nextVisit = parseDate(t.therapy?.nextVisitDate);
+  const trend = t.assessment?.woundAppearanceTrend;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Treatment ${t.sequenceNumber}, ${done ? 'completed' : 'in progress'}`}
+      onPress={onPress}
+      style={(state) => [styles.row, interactionStyle(state, styles.rowHover, styles.rowPressed, focusStyles.inset)]}
+    >
+      <View style={styles.rail}>
+        <View style={[styles.railLine, styles.railTop, isFirst && styles.railHidden, previousDone && styles.railDone]} />
+        <View style={[styles.node, done ? styles.nodeDone : styles.nodeCurrent]} />
+        <View style={[styles.railLine, styles.railBottom, isLast && styles.railHidden, done && styles.railDone]} />
+      </View>
+
+      <View style={styles.rowBody}>
+        <View style={styles.rowTop}>
+          <Text style={styles.rowTitle}>Treatment {t.sequenceNumber}</Text>
+          {t.sequenceNumber === 1 && <Text style={styles.baseline}>Baseline</Text>}
+          {started !== null && <Text style={styles.rowDate}>{calendarDate(started, now)}</Text>}
+        </View>
+        <Text style={[styles.rowStatus, !done && styles.rowStatusOpen]}>{done ? 'Completed' : 'In progress'}</Text>
+
+        <View style={styles.phases}>
+          <PhaseTile phase="pre" uri={t.preImageUri} due={t.phase === 'PRE'} />
+          <PhaseTile phase="post" uri={t.postImageUri} due={t.phase === 'POST'} />
+        </View>
+
+        {(trend !== undefined || nextVisit !== null) && (
+          <View style={styles.rowMeta}>
+            {trend !== undefined && <Text style={[styles.trend, { color: TREND_COLOR[trend] }]}>{trend}</Text>}
+            {nextVisit !== null && <Text style={styles.metaText}>Next visit {calendarDate(nextVisit, now)}</Text>}
+          </View>
+        )}
+      </View>
+
+      <Feather name="chevron-right" size={18} color={tone.node} style={styles.chevron} />
+    </Pressable>
+  );
+};
+
+/** One phase's image with its name underneath, so Pre and Post are never confused. */
+const PhaseTile = ({ phase, uri, due }: { phase: Phase; uri?: string; due: boolean }) => {
+  const [failed, setFailed] = useState(false);
+  const label = PHASE_LABEL[phase];
+  return (
+    <View style={styles.phase}>
+      {uri && !failed ? (
+        <Image
+          source={{ uri }}
+          style={styles.phaseImage}
+          onError={() => setFailed(true)}
+          accessibilityLabel={`${label} image`}
+          accessibilityIgnoresInvertColors
+        />
+      ) : (
+        <View style={[styles.phaseImage, styles.phaseEmpty]}>
+          <Text style={[styles.phaseEmptyText, due && styles.phaseDue]}>{due ? 'Due' : 'Not captured'}</Text>
+        </View>
+      )}
+      <Text style={styles.phaseLabel}>{label}</Text>
+    </View>
+  );
+};
+
+const hairline = StyleSheet.hairlineWidth;
+
 const styles = StyleSheet.create({
-  safe: { 
-    flex: 1, 
-    backgroundColor: '#FFFFFF' 
+  safe: {
+    flex: 1,
+    backgroundColor: colors.background,
   },
-  navBar: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    paddingHorizontal: spacing.lg, 
-    paddingVertical: spacing.lg,
-    backgroundColor: '#FFFFFF'
+  page: {
+    flexGrow: 1,
+    paddingHorizontal: spacing.lg,
+  },
+  column: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
+
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    paddingTop: 12,
   },
   iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#F3F4F6',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.02,
-    shadowRadius: 8,
-    elevation: 1,
-  },
-  emptyState: { 
-    flex: 1, 
-    justifyContent: 'center', 
-    alignItems: 'center' 
-  },
-  container: { 
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-    paddingBottom: 120 
-  },
-  headerGroup: {
-    marginBottom: spacing.xxl,
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
-  },
-  caseBadge: {
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  caseBadgeText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#1D4ED8',
-    letterSpacing: 0.6,
-  },
-  dateBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F3F4F6',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  dateBadgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#374151',
-    marginLeft: 6,
-    letterSpacing: 0.3,
-  },
-  titleText: {
-    fontSize: 40,
-    fontWeight: '800',
-    letterSpacing: -1.2,
-    color: '#0F172A',
-    lineHeight: 48,
-    marginTop: spacing.xs,
-  },
-  baselineCard: {
-    backgroundColor: '#F9FAFB',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 24,
-    padding: spacing.xl,
-    marginTop: spacing.sm,
+    borderColor: colors.border,
   },
-  baselineIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.lg,
+  iconButtonHover: {
+    backgroundColor: colors.surfaceHover,
   },
-  baselineTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: spacing.sm,
+  iconButtonPressed: {
+    backgroundColor: colors.surfacePressed,
   },
-  baselineDesc: {
+
+  context: {
+    marginTop: spacing.lg,
     fontSize: 15,
-    color: '#6B7280',
-    lineHeight: 22,
-    marginBottom: spacing.xl,
+    lineHeight: 20,
+    color: colors.textSecondary,
   },
-  primaryButton: {
-    flexDirection: 'row',
-    backgroundColor: '#111827',
-    paddingVertical: 18,
-    borderRadius: 100,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-    marginRight: 8,
-  },
-  metricsContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    paddingVertical: spacing.xl,
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.xxl,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.06,
-    shadowRadius: 24,
-    elevation: 3,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-  },
-  metricBlock: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  metricDivider: {
-    width: 1,
-    height: 52,
-    backgroundColor: '#E2E8F0',
-    marginHorizontal: spacing.lg,
-  },
-  metricLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  metricLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#94A3B8',
-    letterSpacing: 1,
-  },
-  metricValue: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.5,
-  },
-  metricSubValue: {
-    fontSize: 14,
+  contextName: {
     fontWeight: '600',
-    color: '#94A3B8',
-    marginBottom: 2,
+    color: colors.textPrimary,
   },
-  timelineSection: {
-    marginTop: spacing.md,
+  title: {
+    marginTop: 4,
+    lineHeight: 34,
+  },
+  woundType: {
+    marginTop: 2,
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: '500',
+    color: colors.textSecondary,
+  },
+  woundTypeMissing: {
+    fontWeight: '400',
+    color: colors.textMuted,
+  },
+  facts: {
+    marginTop: 20,
+  },
+
+  empty: {
+    marginTop: 40,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '600',
+    letterSpacing: -0.4,
+    color: colors.textPrimary,
+  },
+  emptyBody: {
+    marginTop: 6,
+    fontSize: 17,
+    lineHeight: 24,
+    color: colors.textSecondary,
+  },
+  journey: {
+    marginTop: spacing.xl,
+    marginBottom: 14,
+  },
+  // A narrow measure keeps the note from ending on a single word.
+  journeyNote: {
+    maxWidth: 320,
+    marginBottom: 28,
+    fontSize: 15,
+    lineHeight: 22,
+    color: colors.textMuted,
+  },
+  action: {
+    alignItems: 'flex-start',
+  },
+  notFound: {
+    marginTop: spacing.xl,
+  },
+
+  nextStep: {
+    marginTop: spacing.lg,
+    padding: spacing.md,
+    borderRadius: radii.control,
+    borderWidth: hairline,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  nextTitle: {
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  nextBody: {
+    marginTop: 4,
+    fontSize: 15,
+    lineHeight: 22,
+    color: colors.textSecondary,
+  },
+  nextAction: {
+    marginTop: 14,
+  },
+
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    marginTop: 36,
+    marginBottom: 12,
   },
   sectionTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#111827',
-    marginBottom: spacing.xl,
-    letterSpacing: -0.5,
-  },
-  timelineContainer: {
-    paddingLeft: 4,
-  },
-  timelineRow: {
-    flexDirection: 'row',
-    marginBottom: spacing.xl,
-  },
-  timelineGraphic: {
-    width: 24,
-    alignItems: 'center',
-    marginRight: spacing.lg,
-  },
-  timelineDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 3,
-    borderColor: '#D1D5DB',
-    zIndex: 2,
-  },
-  timelineDotCompleted: {
-    borderColor: '#111827',
-    backgroundColor: '#111827',
-  },
-  timelineLine: {
-    position: 'absolute',
-    top: 16,
-    bottom: -40,
-    width: 2,
-    backgroundColor: '#E5E7EB',
-    zIndex: 1,
-  },
-  timelineLineCompleted: {
-    backgroundColor: '#111827',
-  },
-  timelineCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 20,
-    padding: spacing.lg,
-    paddingVertical: spacing.xl,
-    marginTop: -8, // Align with dot
-  },
-  timelineCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  timelineCardTitle: {
-    fontSize: 18,
+    fontSize: 20,
+    lineHeight: 26,
     fontWeight: '700',
-    color: '#111827',
+    letterSpacing: -0.3,
+    color: colors.textPrimary,
   },
-  statusPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
+  sectionCount: {
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '500',
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
   },
-  statusPillActive: {
-    backgroundColor: '#FEF3C7',
+
+  timeline: {
+    overflow: 'hidden',
+    borderRadius: radii.control,
+    borderWidth: hairline,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  statusPillCompleted: {
-    backgroundColor: '#F3F4F6',
+  row: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: spacing.md,
   },
-  statusPillText: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
+  rowHover: {
+    backgroundColor: colors.surfaceHover,
   },
-  statusTextActive: {
-    color: '#D97706',
+  rowPressed: {
+    backgroundColor: colors.surfacePressed,
   },
-  statusTextCompleted: {
-    color: '#6B7280',
+  rail: {
+    width: RAIL_WIDTH,
+    alignItems: 'center',
   },
-  timelineCardDesc: {
+  railLine: {
+    width: 1.5,
+    backgroundColor: tone.rail,
+  },
+  railTop: {
+    height: NODE_OFFSET,
+  },
+  railBottom: {
+    flex: 1,
+  },
+  railHidden: {
+    backgroundColor: 'transparent',
+  },
+  railDone: {
+    backgroundColor: colors.accent,
+  },
+  node: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1.5,
+  },
+  nodeDone: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accent,
+  },
+  nodeCurrent: {
+    borderColor: colors.accent,
+    backgroundColor: colors.surface,
+    boxShadow: '0px 0px 0px 4px rgba(0, 91, 79, 0.14)',
+  },
+  rowBody: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 14,
+  },
+  rowTop: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+  },
+  rowTitle: {
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+    color: colors.textPrimary,
+  },
+  baseline: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    color: colors.textMuted,
+  },
+  rowDate: {
+    marginLeft: 'auto',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+  rowStatus: {
+    marginTop: 2,
     fontSize: 14,
-    color: '#6B7280',
     lineHeight: 20,
+    fontWeight: '500',
+    color: colors.textMuted,
   },
-  footerAction: {
-    marginTop: spacing.xl,
-  }
+  rowStatusOpen: {
+    color: colors.accent,
+  },
+  // Capped so the photo pair stays a comparison, not a gallery, on wide screens.
+  phases: {
+    flexDirection: 'row',
+    gap: 10,
+    maxWidth: 400,
+    marginTop: 12,
+  },
+  phase: {
+    flex: 1,
+  },
+  phaseImage: {
+    width: '100%',
+    aspectRatio: 4 / 3,
+    borderRadius: radii.small,
+    overflow: 'hidden',
+    backgroundColor: tone.tile,
+  },
+  phaseEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  phaseEmptyText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    color: colors.textMuted,
+  },
+  phaseDue: {
+    fontWeight: '600',
+    color: colors.pending,
+  },
+  phaseLabel: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: tone.body,
+  },
+  rowMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    columnGap: 10,
+    marginTop: 10,
+  },
+  trend: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  metaText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+  chevron: {
+    marginTop: 16,
+  },
 });

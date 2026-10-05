@@ -1,285 +1,547 @@
-import React from 'react';
-import { View, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } from 'react-native';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import { Text } from '../components/Typography';
-import { PremiumCard } from '../components/PremiumCard';
-import { colors, spacing } from '../lib/theme';
+import React, { useMemo, useState } from 'react';
+import { Image, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
+import type { Case, Treatment } from '@antigravity-project-spec-pack/domain';
+import { ActionButton } from '../components/ActionButton';
+import { FactStrip } from '../components/FactStrip';
+import { JourneyTrack } from '../components/JourneyTrack';
+import { SyncLabel } from '../components/SyncLabel';
+import { Text } from '../components/Typography';
+import {
+  CASE_STATUS,
+  TREND_COLOR,
+  ageFrom,
+  calendarDate,
+  fullDate,
+  parseDate,
+  parseDay,
+  plural,
+  sentenceCase,
+  sexName,
+  visitLabel,
+  type Trend,
+} from '../lib/format';
+import { focusStyles, interactionStyle } from '../lib/interaction';
+import { syncIssueFor, useStalledSync, type SyncIssue } from '../lib/syncStatus';
+import { breakpoints, colors, radii, spacing } from '../lib/theme';
 import { useVisitStore } from '../store/useVisitStore';
 
 type ParamList = {
   Patient: { patientId: string };
 };
 
+const CONTENT_MAX_WIDTH = 680;
+const THUMB = 56;
+const ROW_GAP = 14;
+
+const tone = {
+  body: '#374151',
+  hairline: '#ECEEF1',
+  chevron: '#C3C8CF',
+  tile: '#F1F3F5',
+};
+
+interface CaseRowModel {
+  item: Case;
+  number: number;
+  thumbnailUri?: string;
+  woundType?: string;
+  trend?: Trend;
+  treatments: number;
+  onset: string | null;
+  visit: string | null;
+  syncIssue: SyncIssue;
+}
+
+const buildCaseRows = (cases: Case[], treatments: Treatment[], stalledIds: Set<string>): CaseRowModel[] => {
+  const now = new Date();
+  const newestFirst = (a: Treatment, b: Treatment) => b.createdAt.localeCompare(a.createdAt);
+  // Case numbers follow creation order; open cases are listed before completed ones.
+  const numbered = [...cases]
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((item, index) => ({ item, number: index + 1 }));
+  const ordered = [
+    ...numbered.filter(({ item }) => item.status !== 'COMPLETED'),
+    ...numbered.filter(({ item }) => item.status === 'COMPLETED'),
+  ];
+
+  return ordered.map(({ item, number }) => {
+    const visits = treatments.filter((t) => t.caseId === item.id).sort(newestFirst);
+    const imaged = visits.find((t) => t.postImageUri || t.preImageUri);
+    const planned = visits.find((t) => t.therapy?.nextVisitDate);
+    const onset = parseDay(item.onsetDate);
+    return {
+      item,
+      number,
+      thumbnailUri: imaged?.postImageUri ?? imaged?.preImageUri,
+      woundType: visits.find((t) => t.assessment?.woundType)?.assessment?.woundType,
+      trend: visits[0]?.assessment?.woundAppearanceTrend,
+      treatments: visits.length,
+      onset: onset ? calendarDate(onset, now) : item.onsetDate || null,
+      visit: visitLabel(parseDate(planned?.therapy?.nextVisitDate), parseDate(visits[0]?.createdAt), now),
+      syncIssue: syncIssueFor(item.id, item.syncState, stalledIds),
+    };
+  });
+};
+
 export const PatientScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'Patient'>>();
+  const insets = useSafeAreaInsets();
+  // On wide screens "New case" sits beside the section title instead of floating over the list.
+  const wide = useWindowDimensions().width >= breakpoints.wide;
   const patientId = route.params?.patientId;
 
-  const allPatients = useVisitStore((state) => state.patients);
-  const patient = allPatients.find(p => p.id === patientId);
-  
+  const patient = useVisitStore((state) => state.patients.find((p) => p.id === patientId));
   const allCases = useVisitStore((state) => state.cases);
-  const cases = allCases.filter(c => c.patientId === patientId);
+  const treatments = useVisitStore((state) => state.treatments);
+  const stalled = useStalledSync();
+
+  const cases = useMemo(() => allCases.filter((c) => c.patientId === patientId), [allCases, patientId]);
+  const rows = useMemo(() => buildCaseRows(cases, treatments, stalled.ids), [cases, treatments, stalled.ids]);
+
+  const openNewCase = () => navigation.navigate('NewCase', { patientId });
+  const backButton = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Back to patients"
+      hitSlop={6}
+      onPress={() => navigation.goBack()}
+      style={(state) => [styles.iconButton, interactionStyle(state, styles.iconButtonHover, styles.iconButtonPressed)]}
+    >
+      <Feather name="chevron-left" size={20} color={colors.textPrimary} />
+    </Pressable>
+  );
 
   if (!patient) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.navBar}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton}>
-            <Feather name="chevron-left" size={24} color={colors.textPrimary} />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.emptyState}>
-          <Text variant="h3">Patient not found</Text>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <View style={styles.page}>
+          <View style={styles.column}>
+            <View style={styles.topBar}>{backButton}</View>
+            <View style={styles.notFound}>
+              <Text style={styles.emptyTitle}>Patient not found</Text>
+              <Text style={styles.emptyBody}>This record isn't on this device.</Text>
+            </View>
+          </View>
         </View>
       </SafeAreaView>
     );
   }
 
-  const initials = (patient.firstName[0] + patient.lastName[0]).toUpperCase();
+  const name = `${patient.firstName} ${patient.lastName}`.trim();
+  const initials = `${patient.firstName[0] ?? ''}${patient.lastName[0] ?? ''}`.toUpperCase();
+  const dob = parseDay(patient.dob);
+  const age = ageFrom(patient.dob, new Date());
+  // Column weights keep a full date of birth on one line at phone widths.
+  const facts = [
+    { label: 'Date of birth', value: dob ? fullDate(dob) : patient.dob || 'Not recorded', flex: 1.4 },
+    { label: 'Age', value: age !== null ? plural(age, 'year') : 'Not recorded', flex: 1 },
+    { label: 'Sex', value: sexName(patient.sex) || 'Not recorded', flex: 0.9 },
+  ];
+  const hasCases = rows.length > 0;
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.navBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton}>
-          <Feather name="chevron-left" size={24} color={colors.textPrimary} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.iconButton}>
-          <Feather name="settings" size={20} color={colors.textPrimary} />
-        </TouchableOpacity>
-      </View>
-      
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <View style={styles.avatarLarge}>
-            <Text variant="h1" style={styles.avatarText}>{initials}</Text>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      <ScrollView
+        contentContainerStyle={[styles.page, { paddingBottom: insets.bottom + (hasCases && !wide ? 112 : spacing.xxl) }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.column}>
+          <View style={styles.topBar}>
+            {backButton}
+            <SyncLabel state={syncIssueFor(patient.id, patient.syncState, stalled.ids) ?? 'synced'} />
           </View>
-          <Text variant="h1" style={styles.patientName}>{patient.firstName} {patient.lastName}</Text>
-          <Text variant="bodyMedium" style={styles.patientMeta}>
-            ID: {patient.patientId} • {patient.sex} • DOB: {patient.dob}
-          </Text>
-        </View>
 
-        <View style={styles.sectionHeader}>
-          <Text variant="h3" style={styles.sectionTitle}>Wound Cases ({cases.length})</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('NewCase', { patientId: patient.id })} style={styles.addButton}>
-            <Feather name="plus" size={16} color={colors.accent} />
-            <Text variant="bodyMedium" style={styles.addButtonText}>New Case</Text>
-          </TouchableOpacity>
-        </View>
-
-        {cases.length === 0 ? (
-          <View style={styles.emptyStateCard}>
-            <View style={styles.emptyStateIconContainer}>
-              <Feather name="folder-plus" size={32} color={colors.accent} />
+          <View style={styles.identity}>
+            <View style={styles.monogram}>
+              <Text style={styles.monogramText}>{initials}</Text>
             </View>
-            <Text variant="body" style={styles.emptyStateBody}>
-              No active cases. Tap "New Case" to start.
-            </Text>
+            <View style={styles.identityText}>
+              <Text variant="h2" style={styles.name} accessibilityRole="header" numberOfLines={2}>
+                {name}
+              </Text>
+              <Text style={styles.patientId}>ID {patient.patientId}</Text>
+            </View>
           </View>
-        ) : (
-          cases.map(c => (
-            <PremiumCard key={c.id} onPress={() => navigation.navigate('CaseDetail', { caseId: c.id })} style={styles.caseCard} noPadding>
-              <View style={styles.caseHeader}>
-                <Text variant="h3" style={styles.caseTitle}>Case: {c.woundLocation}</Text>
-                <View style={styles.statusBadge}>
-                  <Text style={styles.statusText}>ACTIVE</Text>
+
+          <FactStrip facts={facts} style={styles.facts} />
+
+          {hasCases ? (
+            <>
+              <View style={styles.sectionHeader}>
+                <View style={styles.sectionTitleRow}>
+                  <Text style={styles.sectionTitle} accessibilityRole="header">
+                    Cases
+                  </Text>
+                  <Text style={styles.sectionCount}>{rows.length}</Text>
                 </View>
+                {wide && <ActionButton label="New case" icon="plus" onPress={openNewCase} />}
               </View>
-              <View style={styles.caseBody}>
-                <View style={styles.metaRow}>
-                  <View style={styles.metaIconContainer}>
-                    <Feather name="map-pin" size={16} color={colors.textSecondary} />
-                  </View>
-                  <Text variant="body" style={styles.metaText}>{c.woundLocation}</Text>
-                </View>
-                <View style={styles.metaRow}>
-                  <View style={styles.metaIconContainer}>
-                    <Feather name="calendar" size={16} color={colors.textSecondary} />
-                  </View>
-                  <Text variant="body" style={styles.metaText}>Onset: {c.onsetDate}</Text>
-                </View>
+              <View style={styles.list}>
+                {rows.map((row, i) => (
+                  <React.Fragment key={row.item.id}>
+                    {i > 0 && <View style={styles.separator} />}
+                    <CaseRow row={row} onPress={() => navigation.navigate('CaseDetail', { caseId: row.item.id })} />
+                  </React.Fragment>
+                ))}
               </View>
-            </PremiumCard>
-          ))
-        )}
+            </>
+          ) : (
+            <View style={styles.empty}>
+              <Text style={styles.emptyTitle}>No cases yet</Text>
+              <Text style={styles.emptyBody}>Each wound gets its own case.</Text>
+              <JourneyTrack current={1} style={styles.journey} />
+              <Text style={styles.journeyNote}>You'll record the wound's location and onset date next.</Text>
+              <View style={styles.emptyAction}>
+                <ActionButton label="Add first case" icon="plus" onPress={openNewCase} />
+              </View>
+            </View>
+          )}
+        </View>
       </ScrollView>
+
+      {hasCases && !wide && (
+        <View style={[styles.fabLayer, { bottom: insets.bottom + spacing.lg }]}>
+          <View style={styles.fabColumn}>
+            <ActionButton label="New case" icon="plus" onPress={openNewCase} floating />
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 };
 
+const CaseRow = ({ row, onPress }: { row: CaseRowModel; onPress: () => void }) => {
+  const status = CASE_STATUS[row.item.status];
+  const location = sentenceCase(row.item.woundLocation) || 'Location not recorded';
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Case ${row.number}, ${location}, ${status}`}
+      accessibilityHint="Opens the case"
+      onPress={onPress}
+      style={(state) => [styles.row, interactionStyle(state, styles.rowHover, styles.rowPressed, focusStyles.inset)]}
+    >
+      <CaseThumbnail uri={row.thumbnailUri} number={row.number} />
+
+      <View style={styles.rowBody}>
+        <View style={styles.rowTop}>
+          <Text style={styles.location} numberOfLines={2}>
+            {location}
+          </Text>
+          {row.visit !== null && <Text style={styles.visit}>{row.visit}</Text>}
+        </View>
+        {row.woundType !== undefined && (
+          <Text style={styles.woundType} numberOfLines={1}>
+            {row.woundType}
+          </Text>
+        )}
+        <View style={styles.statusRow}>
+          <Text style={[styles.status, row.item.status === 'COMPLETED' && styles.statusDone]}>{status}</Text>
+          {row.trend !== undefined && <Text style={[styles.trend, { color: TREND_COLOR[row.trend] }]}>{row.trend}</Text>}
+        </View>
+        <View style={styles.meta}>
+          {row.onset !== null && <Text style={styles.metaText}>Onset {row.onset}</Text>}
+          <Text style={styles.metaText}>{row.treatments ? plural(row.treatments, 'treatment') : 'No treatments yet'}</Text>
+        </View>
+        {row.syncIssue !== null && <SyncLabel state={row.syncIssue} style={styles.rowSync} />}
+      </View>
+
+      <Feather name="chevron-right" size={18} color={tone.chevron} />
+    </Pressable>
+  );
+};
+
+/** The latest wound photo, or the case number until one is captured. */
+const CaseThumbnail = ({ uri, number }: { uri?: string; number: number }) => {
+  const [failed, setFailed] = useState(false);
+  if (uri && !failed) {
+    return <Image source={{ uri }} style={styles.thumb} onError={() => setFailed(true)} accessibilityIgnoresInvertColors />;
+  }
+  return (
+    <View style={styles.thumb}>
+      <Text style={styles.thumbLabel}>Case</Text>
+      <Text style={styles.thumbNumber}>{number}</Text>
+    </View>
+  );
+};
+
+const hairline = StyleSheet.hairlineWidth;
+
 const styles = StyleSheet.create({
-  safe: { 
-    flex: 1, 
-    backgroundColor: '#F8FAFC' 
+  safe: {
+    flex: 1,
+    backgroundColor: colors.background,
   },
-  navBar: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    paddingHorizontal: spacing.lg, 
-    paddingVertical: spacing.md,
-    backgroundColor: '#F8FAFC'
+  page: {
+    flexGrow: 1,
+    paddingHorizontal: spacing.lg,
+  },
+  column: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
+
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 48,
+    paddingTop: 12,
   },
   iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  container: { 
-    padding: spacing.lg,
-    paddingTop: spacing.sm,
-    paddingBottom: 100,
+  iconButtonHover: {
+    backgroundColor: colors.surfaceHover,
   },
-  header: { 
-    alignItems: 'center', 
-    marginBottom: spacing.xxl 
+  iconButtonPressed: {
+    backgroundColor: colors.surfacePressed,
   },
-  avatarLarge: { 
-    width: 96, 
-    height: 96, 
-    borderRadius: 48, 
-    backgroundColor: colors.textPrimary, 
-    alignItems: 'center', 
+
+  identity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.lg,
+  },
+  monogram: {
+    width: 56,
+    height: 56,
+    borderRadius: radii.control,
+    alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.lg,
-    shadowColor: colors.textPrimary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    elevation: 6,
+    backgroundColor: tone.tile,
   },
-  avatarText: {
-    color: '#FFFFFF',
-    fontSize: 36,
+  monogramText: {
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    color: tone.body,
   },
-  patientName: {
-    textAlign: 'center',
-    marginBottom: spacing.xs,
-    fontSize: 28,
+  identityText: {
+    flex: 1,
+    minWidth: 0,
   },
-  patientMeta: {
-    color: colors.textSecondary,
-    textAlign: 'center',
+  name: {
+    lineHeight: 34,
   },
-  sectionHeader: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    marginBottom: spacing.lg 
+  patientId: {
+    marginTop: 2,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '500',
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+
+  facts: {
+    marginTop: spacing.lg,
+  },
+
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    minHeight: 48,
+    marginTop: 36,
+    marginBottom: 10,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
   },
   sectionTitle: {
     fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '700',
+    letterSpacing: -0.3,
     color: colors.textPrimary,
   },
-  addButton: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    backgroundColor: '#DCFCE7', 
-    paddingHorizontal: 16, 
-    paddingVertical: 8, 
-    borderRadius: 99,
+  sectionCount: {
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '500',
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
   },
-  addButtonText: {
-    color: colors.accent, 
-    marginLeft: 6,
+
+  list: {
+    overflow: 'hidden',
+    borderRadius: radii.control,
+    borderWidth: hairline,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: ROW_GAP,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+  },
+  rowHover: {
+    backgroundColor: colors.surfaceHover,
+  },
+  rowPressed: {
+    backgroundColor: colors.surfacePressed,
+  },
+  separator: {
+    height: hairline,
+    marginLeft: spacing.md + THUMB + ROW_GAP,
+    backgroundColor: tone.hairline,
+  },
+  thumb: {
+    width: THUMB,
+    height: THUMB,
+    borderRadius: radii.small,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    backgroundColor: tone.tile,
+  },
+  thumbLabel: {
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '500',
+    color: colors.textMuted,
+  },
+  thumbNumber: {
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '700',
+    color: tone.body,
+    fontVariant: ['tabular-nums'],
+  },
+  rowBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rowTop: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 12,
+  },
+  location: {
+    flex: 1,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+    color: colors.textPrimary,
+  },
+  visit: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+  woundType: {
+    marginTop: 2,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textSecondary,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    columnGap: 8,
+    rowGap: 2,
+    marginTop: 4,
+  },
+  status: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+    color: tone.body,
+  },
+  statusDone: {
+    color: colors.textMuted,
+  },
+  trend: {
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: '600',
   },
-  emptyState: { 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    paddingVertical: spacing.xl 
-  },
-  emptyStateCard: {
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    paddingVertical: spacing.xxl,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderStyle: 'dashed',
-    marginTop: spacing.md,
-  },
-  emptyStateIconContainer: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.accentLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.lg,
-  },
-  emptyStateBody: { 
-    textAlign: 'center', 
-    color: colors.textSecondary,
-  },
-  caseCard: { 
-    marginBottom: spacing.lg,
-    borderRadius: 24,
-    borderWidth: 0,
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.04,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  caseHeader: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    padding: spacing.lg, 
-    backgroundColor: colors.textPrimary,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-  },
-  caseTitle: {
-    color: '#FFFFFF',
-    fontSize: 18,
-  },
-  statusBadge: { 
-    backgroundColor: 'rgba(255,255,255,0.15)', 
-    paddingHorizontal: 10, 
-    paddingVertical: 4, 
-    borderRadius: 8 
-  },
-  statusText: { 
-    color: '#FFFFFF', 
-    fontSize: 11, 
-    fontWeight: '700', 
-    letterSpacing: 0.5 
-  },
-  caseBody: { 
-    padding: spacing.xl, 
-    backgroundColor: '#FFFFFF',
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-  },
-  metaRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center',
-    marginBottom: spacing.md,
-  },
-  metaIconContainer: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+  meta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 10,
+    marginTop: 2,
   },
   metaText: {
-    fontSize: 16,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    fontVariant: ['tabular-nums'],
+  },
+  rowSync: {
+    marginTop: 6,
+  },
+
+  empty: {
+    marginTop: 40,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '600',
+    letterSpacing: -0.4,
+    color: colors.textPrimary,
+  },
+  emptyBody: {
+    marginTop: 6,
+    fontSize: 17,
+    lineHeight: 24,
     color: colors.textSecondary,
-  }
+  },
+  journey: {
+    marginTop: spacing.xl,
+    marginBottom: 14,
+  },
+  // A narrow measure keeps the note from ending on a single word.
+  journeyNote: {
+    maxWidth: 320,
+    marginBottom: 28,
+    fontSize: 15,
+    lineHeight: 22,
+    color: colors.textMuted,
+  },
+  emptyAction: {
+    alignItems: 'flex-start',
+  },
+  notFound: {
+    marginTop: spacing.xl,
+  },
+
+  fabLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    pointerEvents: 'box-none',
+  },
+  fabColumn: {
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH - spacing.lg * 2,
+    alignItems: 'flex-end',
+    pointerEvents: 'box-none',
+  },
 });

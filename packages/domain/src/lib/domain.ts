@@ -1,3 +1,5 @@
+import type { QuestionResponse } from './questions';
+
 export type SyncState = 'synced' | 'pending';
 
 export interface Patient {
@@ -16,10 +18,13 @@ export interface BaselineAssessment {
   exudateLevel: string;
   exudateType: string;
   infectionSigns: string[];
-  pain: number;
+  /** 0 to 10. Missing when the pain question wasn't asked. */
+  pain?: number;
   edgeCondition: string;
   periwoundCondition: string;
   comorbidities: string[];
+  /** Answers to questions an admin added to the assessment form. */
+  responses?: QuestionResponse[];
 }
 
 export interface RevisitAssessment extends BaselineAssessment {
@@ -30,6 +35,8 @@ export interface TherapyDetails {
   therapyGiven: string[];
   dressingType: string;
   nextVisitDate?: string;
+  /** Answers to questions an admin added to the care form. */
+  responses?: QuestionResponse[];
 }
 
 export interface ImageMetadata {

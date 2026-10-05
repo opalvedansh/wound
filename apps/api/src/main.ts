@@ -13,6 +13,17 @@ async function bootstrap() {
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
 
+  // Browser clients: the web portal and the mobile app's web build. CORS_ORIGINS is a comma-separated list.
+  const origins = (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:8081')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  app.enableCors({
+    origin: origins,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+  });
+
   const config = new DocumentBuilder()
     .setTitle('Wound Care API')
     .setDescription('The API description for the Wound Care platform')

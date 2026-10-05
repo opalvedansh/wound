@@ -1,23 +1,49 @@
 import React from 'react';
-import { View, StyleSheet, SafeAreaView, TouchableOpacity, Image, StatusBar } from 'react-native';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import { Text } from '../components/Typography';
-import { spacing } from '../lib/theme';
-import { useVisitStore } from '../store/useVisitStore';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
+import { ActionButton } from '../components/ActionButton';
+import { CaptureTopBar, captureColors, captureFocus } from '../components/CaptureChrome';
+import { Text } from '../components/Typography';
+import { PHASE_NAME } from '../lib/format';
+import { interactionStyle } from '../lib/interaction';
 import { mockAiAdapter } from '../lib/mockAiAdapter';
 import { supabase } from '../lib/supabase';
+import { radii, spacing } from '../lib/theme';
+import { useTreatmentContext } from '../lib/treatmentContext';
+import { useVisitStore } from '../store/useVisitStore';
 
 type ParamList = {
-  ImageReview: { treatmentId: string, step: 'pre' | 'post', imageUri: string };
+  ImageReview: { treatmentId: string; step: 'pre' | 'post'; imageUri: string };
+};
+
+type FeatherName = React.ComponentProps<typeof Feather>['name'];
+
+interface StatusRowProps {
+  icon: FeatherName;
+  color: string;
+  title: string;
+  detail?: string;
+}
+
+// What to try next for each reason the quality check reports.
+const RETAKE_TIPS: Record<string, string> = {
+  'Image is too dark': 'Add light or move somewhere brighter.',
+  'Image is too blurry': 'Hold the phone steady and let the camera focus.',
 };
 
 export const ImageReviewScreen = () => {
   const navigation = useNavigation<any>();
   const route = useRoute<RouteProp<ParamList, 'ImageReview'>>();
-  const { treatmentId, step, imageUri } = route.params || {};
-  const updateTreatment = useVisitStore(state => state.updateTreatment);
-  const treatment = useVisitStore(state => state.treatments.find(t => t.id === treatmentId));
+  const { treatmentId, step = 'pre', imageUri } = route.params || {};
+  const updateTreatment = useVisitStore((state) => state.updateTreatment);
+  const { treatment, patientName, visit } = useTreatmentContext(treatmentId);
+  const previous = useVisitStore((state) =>
+    treatment
+      ? state.treatments.find((t) => t.caseId === treatment.caseId && t.sequenceNumber === treatment.sequenceNumber - 1)
+      : undefined,
+  );
 
   const [qualityCheck, setQualityCheck] = React.useState<{ passed: boolean; reason?: string } | null>(null);
   const [checking, setChecking] = React.useState(true);
@@ -47,20 +73,20 @@ export const ImageReviewScreen = () => {
       setChecking(true);
       const result = await mockAiAdapter.checkImageQuality(imageUri);
       setQualityCheck(result);
-      
+
       if (treatment) {
         const existingMetadata = treatment.imageMetadata || { captureTimestamp: new Date().toISOString(), calibrated: true };
         updateTreatment(treatmentId, {
           imageMetadata: {
             ...existingMetadata,
             lightingScore: result.lightingScore,
-            blurScore: result.blurScore
-          }
+            blurScore: result.blurScore,
+          },
         });
       }
       setChecking(false);
     };
-    
+
     if (!qualityCheck && checking) {
       runCheck();
     }
@@ -68,10 +94,10 @@ export const ImageReviewScreen = () => {
 
   const handleApprove = () => {
     if (qualityCheck && !qualityCheck.passed) {
-      alert("Image quality is too low to proceed. Please retake.");
+      alert('Image quality is too low to proceed. Please retake.');
       return;
     }
-    
+
     if (step === 'pre') {
       updateTreatment(treatmentId, { preImageUri: imageUri });
       navigation.navigate('ClinicalAssessment', { treatmentId });
@@ -81,200 +107,197 @@ export const ImageReviewScreen = () => {
     }
   };
 
+  const phase = PHASE_NAME[step];
+  const context = [patientName, visit].filter(Boolean).join(', ');
+  // A new treatment's pre-treatment image starts as the previous treatment's post-treatment image (see addTreatment).
+  const carriedFrom =
+    step === 'pre' && !!imageUri && imageUri === previous?.postImageUri ? previous.sequenceNumber : undefined;
+  const failed = qualityCheck !== null && !qualityCheck.passed;
+  const reason = qualityCheck?.reason;
+
+  const quality: StatusRowProps = checking
+    ? { icon: 'loader', color: captureColors.text, title: 'Checking image quality' }
+    : failed
+      ? {
+          icon: 'alert-triangle',
+          color: captureColors.warning,
+          title: 'Retake needed',
+          detail: [reason ? `${reason}.` : undefined, reason ? RETAKE_TIPS[reason] : undefined].filter(Boolean).join(' '),
+        }
+      : { icon: 'check-circle', color: captureColors.calibrated, title: 'Image quality OK' };
+
+  // Capture metadata describes the last image taken in this treatment, so it says nothing about a carried-forward one.
+  const calibrated = carriedFrom === undefined ? treatment?.imageMetadata?.calibrated : undefined;
+  const calibration: StatusRowProps | null =
+    calibrated === undefined
+      ? null
+      : calibrated
+        ? { icon: 'check-circle', color: captureColors.calibrated, title: 'Calibrated' }
+        : {
+            icon: 'alert-circle',
+            color: captureColors.warning,
+            title: 'Not calibrated',
+            detail: "The calibration sticker wasn't confirmed for this image.",
+          };
+
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" />
-      <View style={styles.navBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconButton}>
-          <Feather name="x" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
-        <View style={styles.navTitleContainer}>
-          <Text style={styles.navSubtitle}>
-            {step === 'pre' ? 'PRE-WOUND' : 'POST-WOUND'}
-          </Text>
-        </View>
-        <TouchableOpacity style={styles.iconButton}>
-          <Feather name="info" size={20} color="#FFFFFF" />
-        </TouchableOpacity>
+    <View style={styles.screen}>
+      <SafeAreaView edges={['top', 'left', 'right']}>
+        <CaptureTopBar
+          title={`${phase} image`}
+          context={context}
+          onClose={() => navigation.goBack()}
+          closeLabel="Back to camera"
+          closeIcon="chevron-left"
+        />
+      </SafeAreaView>
+
+      <View style={styles.imageArea}>
+        {displayUri && !displayUri.startsWith('mock') ? (
+          <Image
+            source={{ uri: displayUri }}
+            style={styles.image}
+            resizeMode="contain"
+            accessibilityLabel={`${phase} image`}
+            accessibilityIgnoresInvertColors
+          />
+        ) : (
+          <Text style={styles.noPreview}>{displayUri ? 'No preview for this image' : 'Loading image'}</Text>
+        )}
       </View>
 
-      <View style={styles.content}>
-        <View style={styles.imageWrapper}>
-          {displayUri && !displayUri.startsWith('mock') ? (
-            <Image source={{ uri: displayUri }} style={styles.image} resizeMode="cover" />
-          ) : (
-            <View style={styles.placeholderContainer}>
-              <Feather name="camera-off" size={48} color="#333333" />
-            </View>
-          )}
-
-          {/* Floating Quality Badge */}
-          <View style={styles.badgePositioner}>
-            {checking ? (
-              <View style={[styles.qualityPill, { backgroundColor: 'rgba(0,0,0,0.7)' }]}>
-                <Feather name="loader" size={14} color="#FFFFFF" style={styles.badgeIcon} />
-                <Text style={styles.badgeText}>ANALYZING QUALITY...</Text>
-              </View>
-            ) : qualityCheck ? (
-              <View style={[styles.qualityPill, { backgroundColor: qualityCheck.passed ? 'rgba(34,197,94,0.9)' : 'rgba(239,68,68,0.9)' }]}>
-                <Feather name={qualityCheck.passed ? 'check-circle' : 'alert-circle'} size={14} color="#FFFFFF" style={styles.badgeIcon} />
-                <Text style={styles.badgeText}>
-                  {qualityCheck.passed ? 'QUALITY VERIFIED' : `POOR QUALITY: ${qualityCheck.reason?.toUpperCase()}`}
-                </Text>
-              </View>
-            ) : null}
-          </View>
+      <SafeAreaView edges={['bottom', 'left', 'right']} style={styles.panel}>
+        {carriedFrom !== undefined && (
+          <Text style={styles.note}>Carried forward from treatment {carriedFrom}'s post-treatment image.</Text>
+        )}
+        <View style={styles.statusList} accessibilityLiveRegion="polite">
+          <StatusRow {...quality} />
+          {calibration && <StatusRow {...calibration} />}
         </View>
-
-        <View style={styles.footer}>
-          <View style={styles.actions}>
-            <TouchableOpacity style={styles.retakeButton} onPress={() => navigation.goBack()}>
-              <Feather name="rotate-ccw" size={18} color="#FFFFFF" />
-              <Text style={styles.retakeButtonText}>Retake</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[
-                styles.approveButton, 
-                (checking || (qualityCheck !== null && !qualityCheck.passed)) && styles.buttonDisabled
-              ]} 
-              onPress={handleApprove}
-              disabled={checking || (qualityCheck !== null && !qualityCheck.passed)}
-            >
-              <Text style={styles.approveButtonText}>
-                {checking ? 'Analyzing...' : 'Use Image'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+        <View style={styles.actions}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => navigation.goBack()}
+            style={(state) => [
+              styles.secondary,
+              interactionStyle(state, styles.secondaryHover, styles.secondaryPressed, captureFocus.ring),
+            ]}
+          >
+            <Feather name="rotate-ccw" size={18} color={captureColors.text} />
+            <Text style={styles.secondaryLabel}>Retake</Text>
+          </Pressable>
+          <ActionButton
+            label="Use image"
+            icon="check"
+            onPress={handleApprove}
+            disabled={checking || failed}
+            style={styles.primary}
+          />
         </View>
-      </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 };
 
+const StatusRow = ({ icon, color, title, detail }: StatusRowProps) => (
+  <View style={styles.statusRow}>
+    <Feather name={icon} size={16} color={color} style={styles.statusIcon} />
+    <View style={styles.statusBody}>
+      <Text style={[styles.statusTitle, { color }]}>{title}</Text>
+      {!!detail && <Text style={styles.statusDetail}>{detail}</Text>}
+    </View>
+  </View>
+);
+
 const styles = StyleSheet.create({
-  safe: { 
-    flex: 1, 
-    backgroundColor: '#000000' 
-  },
-  navBar: { 
-    flexDirection: 'row', 
-    alignItems: 'center',
-    justifyContent: 'space-between', 
-    paddingHorizontal: spacing.lg, 
-    paddingVertical: spacing.sm,
-    backgroundColor: '#000000'
-  },
-  iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navTitleContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navSubtitle: {
-    color: '#A1A1AA',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-  },
-  content: {
+  screen: {
     flex: 1,
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.xl,
+    backgroundColor: captureColors.background,
   },
-  imageWrapper: { 
-    flex: 1, 
-    backgroundColor: '#111111', 
-    borderRadius: 32, 
-    overflow: 'hidden',
-    position: 'relative',
-    marginTop: spacing.sm,
+  imageArea: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#15181B',
   },
   image: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    width: undefined,
-    height: undefined,
+    width: '100%',
+    height: '100%',
   },
-  placeholderContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#0A0A0A'
+  noPreview: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+    color: captureColors.muted,
   },
-  badgePositioner: {
-    position: 'absolute',
-    top: spacing.xl,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
+
+  panel: {
+    paddingTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.md,
   },
-  qualityPill: { 
+  note: {
+    marginBottom: 12,
+    fontSize: 13,
+    lineHeight: 18,
+    color: captureColors.muted,
+  },
+  statusList: {
+    gap: 12,
+  },
+  statusRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16, 
-    paddingVertical: 10, 
-    borderRadius: 100,
+    alignItems: 'flex-start',
+    gap: 10,
   },
-  badgeIcon: {
-    marginRight: 6,
+  statusIcon: {
+    marginTop: 2,
   },
-  badgeText: {
-    color: '#FFFFFF', 
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1,
+  statusBody: {
+    flex: 1,
   },
-  footer: {
-    paddingTop: spacing.xl,
+  statusTitle: {
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '600',
   },
-  actions: { 
+  statusDetail: {
+    marginTop: 2,
+    fontSize: 14,
+    lineHeight: 20,
+    color: captureColors.muted,
+  },
+
+  actions: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.md,
+    gap: 12,
+    marginTop: spacing.lg,
   },
-  retakeButton: {
+  secondary: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#18181B',
-    borderRadius: 100,
-    paddingVertical: 18,
+    gap: 8,
+    height: 52,
+    borderRadius: radii.control,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.28)',
   },
-  retakeButtonText: {
-    color: '#FFFFFF',
+  secondaryHover: {
+    backgroundColor: captureColors.control,
+  },
+  secondaryPressed: {
+    backgroundColor: captureColors.controlPressed,
+  },
+  secondaryLabel: {
     fontSize: 16,
+    lineHeight: 20,
     fontWeight: '600',
-    marginLeft: 8,
+    color: captureColors.text,
   },
-  approveButton: {
-    flex: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 100,
-    paddingVertical: 18,
+  primary: {
+    flex: 1,
+    height: 52,
   },
-  approveButtonText: {
-    color: '#000000',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  }
 });

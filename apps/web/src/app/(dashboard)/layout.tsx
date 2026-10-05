@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Activity, Users, ClipboardList, FileText, LogOut, LayoutList } from 'lucide-react';
+import { Activity, Users, ClipboardList, FileText, ListChecks, LogOut } from 'lucide-react';
 import { supabaseBrowser as supabase } from '../../lib/supabase/client';
 import { User } from '@supabase/supabase-js';
 
@@ -11,7 +11,7 @@ const NAV_ITEMS = [
   { href: '/patients',         label: 'Patients',     icon: Users },
   { href: '/review-queue',     label: 'Review Queue', icon: ClipboardList },
   { href: '/reports',          label: 'Reports',      icon: FileText },
-  { href: '/assessment-config',label: 'Assessment',   icon: LayoutList },
+  { href: '/questions',        label: 'Questions',    icon: ListChecks },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

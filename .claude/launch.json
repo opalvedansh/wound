@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["NX_TUI=false", "npx", "nx", "dev", "web", "--port=3000"],
+      "port": 3000
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["NX_TUI=false", "PORT=3333", "npx", "nx", "serve", "api"],
+      "port": 3333
+    },
+    {
+      "name": "api-3334",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["NX_TUI=false", "PORT=3334", "npx", "nx", "serve", "api"],
+      "port": 3334
+    },
+    {
+      "name": "mobile-web",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd apps/mobile && BROWSER=none exec npx expo start --web --clear --port 8081"],
+      "port": 8081
+    }
+  ]
+}
