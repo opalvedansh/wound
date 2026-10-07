@@ -24,6 +24,9 @@
       "@antigravity-project-spec-pack/domain/server": [
         "./packages/domain/src/server.ts"
       ],
+      "@antigravity-project-spec-pack/domain/wound-model": [
+        "./packages/domain/src/lib/woundModel.ts"
+      ],
       "@antigravity-project-spec-pack/domain/questions": [
         "./packages/domain/src/lib/questions.ts"
       ]

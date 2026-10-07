@@ -49,7 +49,7 @@ describe('SupabaseAuthGuard', () => {
 
   it("checks the signature, audience and issuer, and takes the role from app_metadata only", async () => {
     verify.mockResolvedValue({
-      payload: { sub: 'user-1', app_metadata: { role: 'admin' }, user_metadata: { role: 'clinician' } },
+      payload: { sub: 'user-1', email: 'dr@clinic.example', app_metadata: { role: 'admin' }, user_metadata: { role: 'clinician' } },
     });
     const request = withToken('abc');
     await expect(new SupabaseAuthGuard().canActivate(contextFor(request))).resolves.toBe(true);
@@ -58,14 +58,14 @@ describe('SupabaseAuthGuard', () => {
       audience: 'authenticated',
       issuer: 'https://project.supabase.co/auth/v1',
     });
-    expect(request.user).toEqual({ id: 'user-1', role: 'admin' });
+    expect(request.user).toEqual({ id: 'user-1', role: 'admin', email: 'dr@clinic.example' });
   });
 
   it('never trusts a role the user can set themselves', async () => {
     verify.mockResolvedValue({ payload: { sub: 'user-2', user_metadata: { role: 'admin' } } });
     const request = withToken();
     await new SupabaseAuthGuard().canActivate(contextFor(request));
-    expect(request.user).toEqual({ id: 'user-2', role: null });
+    expect(request.user).toEqual({ id: 'user-2', role: null, email: null });
   });
 
   it('rejects bad or expired tokens, and tokens without a user', async () => {
@@ -110,8 +110,8 @@ describe('SupabaseAuthGuard', () => {
 describe('AdminGuard', () => {
   it('lets admins through and nobody else', () => {
     const guard = new AdminGuard();
-    expect(guard.canActivate(contextFor({ headers: {}, user: { id: 'a', role: 'admin' } }))).toBe(true);
-    expect(() => guard.canActivate(contextFor({ headers: {}, user: { id: 'b', role: null } }))).toThrow(ForbiddenException);
+    expect(guard.canActivate(contextFor({ headers: {}, user: { id: 'a', role: 'admin', email: null } }))).toBe(true);
+    expect(() => guard.canActivate(contextFor({ headers: {}, user: { id: 'b', role: null, email: null } }))).toThrow(ForbiddenException);
     expect(() => guard.canActivate(contextFor({ headers: {} }))).toThrow(ForbiddenException);
   });
 });

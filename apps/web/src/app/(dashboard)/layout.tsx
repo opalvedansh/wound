@@ -55,7 +55,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <aside className="hidden md:flex w-64 lg:w-72 shrink-0 flex-col bg-white/40 dark:bg-black/20 backdrop-blur-xl border-r border-black/5 dark:border-white/5 z-10">
         {/* Logo */}
         <div className="flex items-center h-20 px-8 border-b border-black/5 dark:border-white/5">
-          <span className="text-xl font-bold tracking-tighter">ClearAligner</span>
+          <span className="text-xl font-bold tracking-tighter">Wound Care</span>
         </div>
 
         {/* Nav */}
@@ -105,7 +105,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Mobile top bar */}
         <header className="md:hidden flex items-center justify-between px-4 h-14 bg-background/90 backdrop-blur-md border-b border-black/5 dark:border-white/5 sticky top-0 z-20">
-          <span className="text-base font-bold tracking-tight">ClearAligner</span>
+          <span className="text-base font-bold tracking-tight">Wound Care</span>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-[10px] ring-1 ring-primary/20">
               {initials}
@@ -136,6 +136,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Scrollable page content */}
         <main className="flex-1 overflow-y-auto">
+          {/* Stays until the clinical validation and regulatory steps in wound-ai/docs/roadmap.md are done. */}
+          <p className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-900 md:px-8">
+            Research prototype, not for patient care. AI results are drafts for a clinician to review.
+          </p>
           <div className="px-4 py-6 md:px-8 lg:px-10 md:py-8 pb-24 md:pb-10 max-w-6xl mx-auto w-full">
             {children}
           </div>

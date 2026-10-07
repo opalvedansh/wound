@@ -8,17 +8,18 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider = "postgresql"
 }
 
 model User {
-  id        String    @id // Matches auth.users.id
-  email     String    @unique
-  firstName String
-  lastName  String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id        String     @id // Matches auth.users.id; the API creates the row on a user's first write
+  email     String     @unique
+  firstName String     @default("")
+  lastName  String     @default("")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
   patients  Patient[]
+  reviews   AIReview[]
 }
 
 model Patient {
@@ -31,7 +32,7 @@ model Patient {
   sex         String
   dateOfBirth DateTime
   location    String?
-  consent     Json?    // DPDP consent at registration: { care, aiTraining, noticeVersion, recordedAt }
+  consent     Json? // DPDP consent at registration: { care, aiTraining, noticeVersion, recordedAt }
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   cases       Case[]
@@ -51,16 +52,16 @@ model Case {
 }
 
 model Treatment {
-  id        String    @id @default(uuid())
-  caseId    String
-  case      Case      @relation(fields: [caseId], references: [id])
-  therapy   String[]
-  dressing  String?
-  nextVisit DateTime?
+  id            String    @id @default(uuid())
+  caseId        String
+  case          Case      @relation(fields: [caseId], references: [id])
+  therapy       String[]
+  dressing      String?
+  nextVisit     DateTime?
   careResponses Json? // answers to admin-added care questions: { questionId, title, type, answer }[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  phases    Phase[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  phases        Phase[]
 }
 
 model Phase {
@@ -85,7 +86,7 @@ model ClinicalAssessment {
   painLevel          Int
   edgeCondition      String?
   periwoundCondition String?
-  responses          Json?    // answers to admin-added questions: { questionId, title, type, answer }[]
+  responses          Json? // answers to admin-added questions: { questionId, title, type, answer }[]
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -100,9 +101,9 @@ model Image {
 }
 
 model AIResult {
-  id               String   @id @default(uuid())
-  phaseId          String   @unique
-  phase            Phase    @relation(fields: [phaseId], references: [id])
+  id               String    @id @default(uuid())
+  phaseId          String    @unique
+  phase            Phase     @relation(fields: [phaseId], references: [id])
   area             Float?
   length           Float?
   height           Float?
@@ -110,24 +111,46 @@ model AIResult {
   minorAxis        Float?
   shapeAnalysis    String?
   tissuePercentage Json? // For Phase 2
-  confidenceScore  Float?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  confidenceScore  Float? // wound-type probability from the model
+  // From the wound-ai model service (wound-ai/api/server.py). area / length / height (= width) above are
+  // copied out of `findings` so the area trend can be queried; `findings` is the full response.
+  findings         Json?
+  intake           Json? // the answers the model was given (no identity)
+  draftReport      String?
+  modelVersions    Json?
+  modelCaseId      String? // the model service's case_id, sent back with the clinician's review
+  review           AIReview?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+// A clinician's decision on an AI draft. One per result; nothing reaches the record unreviewed.
+model AIReview {
+  id          String   @id @default(uuid())
+  aiResultId  String   @unique
+  aiResult    AIResult @relation(fields: [aiResultId], references: [id])
+  reviewerId  String
+  reviewer    User     @relation(fields: [reviewerId], references: [id])
+  decision    String // "approved" | "edited" | "rejected"
+  finalReport String? // the approved or edited text
+  reason      String? // why a draft was rejected
+  corrections Json? // e.g. { woundType: "venous" }, for retraining
+  createdAt   DateTime @default(now())
 }
 
 // The question catalog admins edit in the web portal (rules: packages/domain/src/lib/questions.ts).
 model AssessmentQuestion {
   id           String   @id @default(uuid())
   form         String   @default("assessment") // "assessment" (before treatment) | "care" (after treatment)
-  fieldKey     String?  // built-in questions: the treatment field the answer is stored in; null for added ones
-  title        String           // "WOUND TYPE"
-  type         String           // "chip_single" | "chip_multi" | "numeric"
-  options      Json?            // string[] for chip questions
+  fieldKey     String? // built-in questions: the treatment field the answer is stored in; null for added ones
+  title        String // "WOUND TYPE"
+  type         String // "chip_single" | "chip_multi" | "numeric"
+  options      Json? // string[] for chip questions
   required     Boolean  @default(false)
   order        Int      @default(0)
   active       Boolean  @default(true)
   followUpOnly Boolean  @default(false)
-  updatedBy    String?  // auth user id of the admin who last changed the question
+  updatedBy    String? // auth user id of the admin who last changed the question
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

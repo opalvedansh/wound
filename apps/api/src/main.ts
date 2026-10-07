@@ -33,7 +33,8 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  const port = process.env.PORT || 3000;
+  // 3333: where the web portal and mobile app expect it (3000 is the web portal's own port).
+  const port = process.env.PORT || 3333;
   await app.listen(port);
   Logger.log(`🚀 Application is running on: http://localhost:${port}/${globalPrefix}`);
   Logger.log(`📚 Swagger documentation is running on: http://localhost:${port}/api/docs`);

@@ -24,6 +24,8 @@ export interface AuthUser {
    * editable by the user themselves, so it's never used for access decisions.
    */
   role: string | null;
+  /** Null for accounts that sign in by phone. */
+  email: string | null;
 }
 
 export interface AuthenticatedRequest {
@@ -84,10 +86,17 @@ export class SupabaseAuthGuard implements CanActivate {
       appMetadata && typeof appMetadata === 'object' && typeof (appMetadata as Record<string, unknown>)['role'] === 'string'
         ? ((appMetadata as Record<string, unknown>)['role'] as string)
         : null;
-    request.user = { id: payload['sub'], role };
+    const email = typeof payload['email'] === 'string' && payload['email'] ? payload['email'] : null;
+    request.user = { id: payload['sub'], role, email };
     return true;
   }
 }
+
+/** The signed-in user on a protected route. The app-wide guard has already checked the token. */
+export const currentUser = (request: AuthenticatedRequest): AuthUser => {
+  if (!request.user) throw new UnauthorizedException('Sign in to continue.');
+  return request.user;
+};
 
 /** Use after SupabaseAuthGuard: only users whose `app_metadata.role` is "admin" get through. */
 @Injectable()

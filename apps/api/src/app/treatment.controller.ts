@@ -1,40 +1,22 @@
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Req } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { currentUser, type AuthenticatedRequest } from './auth/supabase-auth.guard';
 import { PrismaService } from './prisma.service';
 
+/** Read-only for now: visits are created through POST /cases/:caseId/visits. */
+@ApiTags('treatments')
+@ApiBearerAuth()
 @Controller('treatments')
 export class TreatmentController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get(':id')
-  async getTreatment(@Param('id') id: string) {
-    return this.prisma.treatment.findUniqueOrThrow({
-      where: { id },
-      include: {
-        phases: {
-          include: {
-            assessment: true,
-            image: true,
-            aiResult: true,
-          }
-        }
-      }
+  async get(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    const treatment = await this.prisma.treatment.findFirst({
+      where: { id, case: { patient: { userId: currentUser(request).id } } },
+      include: { phases: { include: { assessment: true, image: true, aiResult: { include: { review: true } } } } },
     });
-  }
-
-  @Post()
-  async createTreatment(@Body() data: any) {
-    return this.prisma.treatment.create({
-      data,
-    });
-  }
-
-  @Post(':id/phases')
-  async createPhase(@Param('id') id: string, @Body() data: any) {
-    return this.prisma.phase.create({
-      data: {
-        ...data,
-        treatmentId: id,
-      }
-    });
+    if (!treatment) throw new NotFoundException('Treatment not found.');
+    return treatment;
   }
 }

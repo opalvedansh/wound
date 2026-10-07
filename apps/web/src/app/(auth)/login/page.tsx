@@ -42,7 +42,7 @@ export default function LoginPage() {
             <div className="mx-auto w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center mb-4">
               <Activity className="w-6 h-6" />
             </div>
-            <CardTitle className="text-3xl font-bold tracking-tight">ClearAligner</CardTitle>
+            <CardTitle className="text-3xl font-bold tracking-tight">Wound Care</CardTitle>
             <CardDescription>Clinical Portal Access</CardDescription>
           </CardHeader>
           <CardContent className="px-10 pb-10">

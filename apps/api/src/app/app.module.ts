@@ -10,11 +10,25 @@ import { CaseController } from './case.controller';
 import { TreatmentController } from './treatment.controller';
 import { QuestionsController } from './questions/questions.controller';
 import { QuestionsService } from './questions/questions.service';
+import { UsersService } from './users.service';
+import { ModelClient } from './visits/model-client';
+import { StorageService } from './visits/storage.service';
+import { VisitsController } from './visits/visits.controller';
+import { VisitsService } from './visits/visits.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [AppController, PatientController, CaseController, TreatmentController, QuestionsController],
+  controllers: [AppController, PatientController, CaseController, TreatmentController, QuestionsController, VisitsController],
   // Every route needs a signed-in user unless it is marked @Public().
-  providers: [AppService, PrismaService, QuestionsService, { provide: APP_GUARD, useClass: SupabaseAuthGuard }],
+  providers: [
+    AppService,
+    PrismaService,
+    QuestionsService,
+    UsersService,
+    ModelClient,
+    StorageService,
+    VisitsService,
+    { provide: APP_GUARD, useClass: SupabaseAuthGuard },
+  ],
 })
 export class AppModule {}

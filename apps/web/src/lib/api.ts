@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useState } from 'react';
 import { supabaseBrowser } from './supabase/client';
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333/api').replace(/\/+$/, '');
@@ -23,7 +24,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
       headers: {
-        'Content-Type': 'application/json',
+        // JSON bodies only: a FormData upload sets its own multipart type and boundary.
+        ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init.headers,
       },
@@ -43,3 +45,28 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const errorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
+
+/** Loads `path` once (and again on `reload`), for pages that show one API resource. */
+export function useApi<T>(path: string) {
+  const [data, setData] = useState<T>();
+  const [error, setError] = useState<ApiError | Error>();
+  const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      setData(await api<T>(path));
+      setError(undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e : new Error(errorMessage(e)));
+    } finally {
+      setLoading(false);
+    }
+  }, [path]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  return { data, error, loading, reload, setData };
+}
