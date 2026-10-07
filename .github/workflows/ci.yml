@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  model:
+    name: Model service (wound-ai)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wound-ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: wound-ai/requirements.txt
+      # CPU PyTorch: much smaller than the default CUDA build, and CI has no GPU.
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements.txt
+      - name: API contract and flowchart rules
+        run: python -m pytest tests -q
+      - name: Smoke test (tiny synthetic training run through every script)
+        run: python scripts/smoke_test.py
+
+  apps:
+    name: API, web and shared code
+    runs-on: ubuntu-latest
+    env:
+      # prisma.config.ts reads it; generating the client never connects.
+      DIRECT_URL: postgresql://ci:ci@localhost:5432/ci
+      NX_DAEMON: "false"
+      NX_NO_CLOUD: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            apps/mobile/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix apps/mobile
+      - run: npx prisma generate
+      - name: Tests
+        run: |
+          npx jest -c packages/domain/jest.config.cts packages/domain
+          npx jest -c apps/api/jest.config.cts apps/api/src
+      - name: Type-check
+        run: |
+          npx tsc --noEmit -p apps/api/tsconfig.app.json
+          npx tsc --noEmit -p apps/api/tsconfig.spec.json
+          (cd apps/web && npx next typegen)
+          npx tsc --noEmit -p apps/web/tsconfig.json
+          npx tsc --noEmit -p apps/mobile/tsconfig.app.json
