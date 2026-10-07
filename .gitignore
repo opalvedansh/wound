@@ -70,3 +70,13 @@ npm-debug.*
 web-build/
 cache/
 
+
+# wound-ai (Python model service): environments, model weights, data and generated files
+.venv/
+__pycache__/
+*.pt
+wound-ai/checkpoints/
+wound-ai/data/
+wound-ai/runs/
+wound-ai/reports/
+wound-ai/markers.pdf

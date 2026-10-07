@@ -1,0 +1,21 @@
+# PyTorch is preinstalled on Kaggle and Colab; elsewhere install torch + torchvision first (pytorch.org).
+# Versions below are the ones the smoke test was run with (Python 3.13, torch 2.14).
+timm>=1.0
+segmentation-models-pytorch>=0.5.0
+albumentations>=2.0,<3          # 2.x API (fill=, quality_range=)
+opencv-python-headless>=4.8     # needs cv2.aruco.ArucoDetector
+numpy
+pandas
+scikit-learn
+pillow
+fastapi
+uvicorn
+python-multipart
+httpx                           # only for the API tests (smoke_test.py, tests/)
+pytest
+
+# Report-writer (MedGemma) only. Not needed for segmentation/classification.
+# transformers>=4.50
+# peft
+# bitsandbytes
+# accelerate

@@ -1,0 +1,9 @@
+{
+  "_comment": "Example folder->label map for an AZH-style class-folder dataset. Check the real folder names after extracting and edit. null drops a folder.",
+  "D": "diabetic",
+  "P": "pressure",
+  "S": "surgical",
+  "V": "venous",
+  "N": "not_wound",
+  "BG": null
+}

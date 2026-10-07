@@ -1,0 +1,192 @@
+"""Datasets, transforms and patient-level splitting.
+
+Everything is driven by a single manifest CSV with (at least) these columns:
+
+    image_path   path to the RGB photo
+    mask_path    path to the wound mask PNG (optional; empty if none)
+    tissue_path  path to the tissue-class mask PNG (optional)
+    patient_id   who the photo belongs to  <- splits are done on THIS, never per image
+    source       which dataset / hospital / device it came from
+    split        train | val | test
+
+plus any label columns you want to train on (wound_type, pu_stage, burn_depth,
+dfu_infection, ...) and metadata columns (body_location, fitzpatrick, ...).
+"""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# Tissue classes used in the tissue-segmentation masks (pixel value = class index).
+TISSUE_CLASSES = ["background", "granulation", "slough", "necrosis", "epithelial", "periwound_erythema"]
+
+
+# --------------------------------------------------------------------------- transforms
+
+def build_transforms(size: int, train: bool) -> A.Compose:
+    """Augmentations for wound photos.
+
+    Colour carries clinical meaning (red granulation, yellow slough, black necrosis,
+    redness of the surrounding skin), so hue shifts are kept very small. Geometry
+    and lighting are varied more, because phone photos vary a lot there.
+    """
+    resize = [
+        A.LongestMaxSize(max_size=size),
+        A.PadIfNeeded(min_height=size, min_width=size, border_mode=cv2.BORDER_CONSTANT, fill=0, fill_mask=0),
+    ]
+    if not train:
+        return A.Compose(resize + [A.Normalize(IMAGENET_MEAN, IMAGENET_STD), ToTensorV2()])
+    return A.Compose(
+        resize
+        + [
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.2),
+            A.RandomRotate90(p=0.3),
+            A.Affine(scale=(0.8, 1.2), rotate=(-25, 25), translate_percent=(-0.05, 0.05), p=0.5),
+            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
+            A.HueSaturationValue(hue_shift_limit=4, sat_shift_limit=12, val_shift_limit=12, p=0.3),
+            A.RandomGamma(gamma_limit=(85, 115), p=0.2),
+            A.OneOf([A.MotionBlur(blur_limit=5), A.GaussianBlur(blur_limit=(3, 5))], p=0.15),
+            A.ImageCompression(quality_range=(60, 100), p=0.3),  # WhatsApp-style recompression
+            A.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+            ToTensorV2(),
+        ]
+    )
+
+
+def read_rgb(path: str) -> np.ndarray:
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if img is None:
+        raise FileNotFoundError(path)
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+
+def read_mask(path: str, binary: bool) -> np.ndarray:
+    m = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if m is None:
+        raise FileNotFoundError(path)
+    return (m > 127).astype(np.uint8) if binary else m.astype(np.uint8)
+
+
+# --------------------------------------------------------------------------- datasets
+
+class SegmentationDataset(Dataset):
+    """Wound boundary (binary) or tissue (multi-class) segmentation."""
+
+    def __init__(self, df: pd.DataFrame, size: int, train: bool, mask_col: str = "mask_path", binary: bool = True):
+        self.df = df[df[mask_col].fillna("").astype(str).str.len() > 0].reset_index(drop=True)
+        self.tf = build_transforms(size, train)
+        self.mask_col = mask_col
+        self.binary = binary
+
+    def __len__(self) -> int:
+        return len(self.df)
+
+    def __getitem__(self, i: int):
+        row = self.df.iloc[i]
+        img = read_rgb(row["image_path"])
+        mask = read_mask(row[self.mask_col], self.binary)
+        if mask.shape[:2] != img.shape[:2]:
+            mask = cv2.resize(mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        out = self.tf(image=img, mask=mask)
+        mask_t = out["mask"].long()
+        if self.binary:
+            mask_t = mask_t.float().unsqueeze(0)
+        return out["image"], mask_t
+
+
+def crop_to_wound(img: np.ndarray, mask: np.ndarray | None, margin: float = 0.35) -> np.ndarray:
+    """Crop around the wound plus a margin of surrounding skin (periwound matters clinically)."""
+    if mask is None or mask.sum() == 0:
+        return img
+    ys, xs = np.where(mask > 0)
+    y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+    h, w = y1 - y0 + 1, x1 - x0 + 1
+    py, px = int(h * margin), int(w * margin)
+    H, W = img.shape[:2]
+    return img[max(0, y0 - py): min(H, y1 + py + 1), max(0, x0 - px): min(W, x1 + px + 1)]
+
+
+class MetaEncoder:
+    """One-hot encodes categorical metadata (e.g. body_location) with a fixed vocabulary."""
+
+    def __init__(self, columns: list[str], vocab: dict[str, list[str]] | None = None):
+        self.columns = columns
+        self.vocab = vocab or {}
+
+    def fit(self, df: pd.DataFrame) -> "MetaEncoder":
+        for c in self.columns:
+            self.vocab[c] = sorted(df[c].fillna("unknown").astype(str).unique().tolist())
+            if "unknown" not in self.vocab[c]:
+                self.vocab[c].append("unknown")
+        return self
+
+    @property
+    def dim(self) -> int:
+        return sum(len(v) for v in self.vocab.values())
+
+    def encode(self, values: dict) -> np.ndarray:
+        parts = []
+        for c in self.columns:
+            vocab = self.vocab[c]
+            v = str(values.get(c, "unknown") or "unknown")
+            vec = np.zeros(len(vocab), np.float32)
+            vec[vocab.index(v) if v in vocab else vocab.index("unknown")] = 1.0
+            parts.append(vec)
+        return np.concatenate(parts) if parts else np.zeros(0, np.float32)
+
+
+class ClassificationDataset(Dataset):
+    """Wound type / stage / depth classification on a wound-centred crop."""
+
+    def __init__(self, df: pd.DataFrame, target: str, classes: list[str], size: int, train: bool,
+                 meta: MetaEncoder | None = None):
+        self.df = df[df[target].notna()].reset_index(drop=True)
+        self.target, self.classes, self.meta = target, classes, meta
+        self.tf = build_transforms(size, train)
+
+    def __len__(self) -> int:
+        return len(self.df)
+
+    def __getitem__(self, i: int):
+        row = self.df.iloc[i]
+        img = read_rgb(row["image_path"])
+        mp = str(row.get("mask_path", "") or "")
+        if mp and mp != "nan":
+            img = crop_to_wound(img, read_mask(mp, binary=True))
+        x = self.tf(image=img)["image"]
+        y = self.classes.index(str(row[self.target]))
+        m = torch.from_numpy(self.meta.encode(row.to_dict())) if self.meta and self.meta.columns else torch.zeros(0)
+        return x, m, y
+
+
+# --------------------------------------------------------------------------- splitting
+
+def patient_level_split(df: pd.DataFrame, val_frac: float = 0.15, test_frac: float = 0.15,
+                        seed: int = 42) -> pd.DataFrame:
+    """Assign train/val/test so that no patient appears in more than one split.
+
+    Splitting per image leaks the same ulcer (photographed on different days) into
+    both train and test and inflates every metric. Always split per patient.
+    """
+    rng = np.random.default_rng(seed)
+    df = df.copy()
+    df["patient_id"] = df["patient_id"].fillna(df["image_path"])  # unknown -> treat each image as its own patient
+    patients = rng.permutation(np.asarray(df["patient_id"].astype(str).unique(), dtype=object))
+    n = len(patients)
+    n_test, n_val = int(round(n * test_frac)), int(round(n * val_frac))
+    test = set(patients[:n_test])
+    val = set(patients[n_test:n_test + n_val])
+    df["split"] = [
+        "test" if p in test else "val" if p in val else "train" for p in df["patient_id"].astype(str)
+    ]
+    return df
