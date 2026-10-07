@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { currentUser, type AuthenticatedRequest } from '../auth/supabase-auth.guard';
@@ -11,6 +11,12 @@ import { MAX_PHOTO_BYTES, VisitsService, type PhotoUpload } from './visits.servi
 @Controller()
 export class VisitsController {
   constructor(private readonly visits: VisitsService) {}
+
+  @Get('overview')
+  @ApiOperation({ summary: 'Dashboard counts and the drafts awaiting review (urgent first) for the signed-in clinician.' })
+  overview(@Req() request: AuthenticatedRequest) {
+    return this.visits.overview(currentUser(request));
+  }
 
   @Get('model/intake-questions')
   @ApiOperation({ summary: "The wound model's core intake questions, for the visit form." })
@@ -36,6 +42,20 @@ export class VisitsController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.visits.create(currentUser(request), caseId, photo, intake);
+  }
+
+  @Delete('visits/:id')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Delete a visit with its result, review and photo.' })
+  removeVisit(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.visits.removeVisit(currentUser(request), id);
+  }
+
+  @Delete('patients/:id')
+  @HttpCode(204)
+  @ApiOperation({ summary: 'Delete a patient with every wound, visit and photo.' })
+  removePatient(@Param('id') id: string, @Req() request: AuthenticatedRequest) {
+    return this.visits.removePatient(currentUser(request), id);
   }
 
   @Post('visits/:id/review')

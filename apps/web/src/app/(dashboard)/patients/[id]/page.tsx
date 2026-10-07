@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Plus, Trash2 } from "lucide-react";
 import type { CaseSummary, PatientSummary } from "@antigravity-project-spec-pack/domain/wound-model";
 import { Button } from "../../../../components/ui/button";
 import { Field, PageNote, fieldClass } from "../../../../components/ui/field";
@@ -63,8 +63,26 @@ function NewWoundForm({ patientId, onCancel }: { patientId: string; onCancel: ()
 
 export default function PatientDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { data: patient, error, loading } = useApi<PatientSummary>(`/patients/${id}`);
   const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteProblem, setDeleteProblem] = useState<string>();
+
+  const removePatient = async () => {
+    if (!patient) return;
+    const name = `${patient.firstName} ${patient.lastName}`;
+    if (!window.confirm(`Delete ${name} with every wound, visit and photo? This can't be undone.`)) return;
+    setDeleting(true);
+    setDeleteProblem(undefined);
+    try {
+      await api<void>(`/patients/${patient.id}`, { method: "DELETE" });
+      router.push("/patients");
+    } catch (e) {
+      setDeleteProblem(errorMessage(e));
+      setDeleting(false);
+    }
+  };
 
   if (loading && !patient) return <PageNote>Loading the patient…</PageNote>;
   if (error || !patient) return <PageNote tone="error">{error?.message ?? "Patient not found."}</PageNote>;
@@ -82,6 +100,19 @@ export default function PatientDetailPage() {
           ID {patient.patientId} · born {dateText(patient.dateOfBirth)} · {SEX_NAME[patient.sex] ?? patient.sex}
           {patient.location && ` · ${patient.location}`}
         </p>
+        <button
+          type="button"
+          disabled={deleting}
+          onClick={() => void removePatient()}
+          className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-destructive hover:underline disabled:opacity-50"
+        >
+          <Trash2 className="w-4 h-4" /> {deleting ? "Deleting…" : "Delete patient"}
+        </button>
+        {deleteProblem && (
+          <p role="alert" className="text-sm text-destructive">
+            {deleteProblem}
+          </p>
+        )}
       </div>
 
       <section className="flex flex-col gap-3">

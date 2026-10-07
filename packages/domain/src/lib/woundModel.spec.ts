@@ -57,6 +57,7 @@ describe('display helpers', () => {
     expect(isUncertain({ label: 'diabetic', prob: 0.69, top: [] })).toBe(true);
     expect(isUncertain({ label: 'diabetic', prob: 0.7, top: [] })).toBe(false);
     expect(isUncertain(undefined)).toBe(false);
+    expect(isUncertain({ label: 'diabetic', prob: null, top: [], rule: 'diabetes and a foot location' })).toBe(false);
   });
 
   it('turns model ids into words', () => {

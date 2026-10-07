@@ -31,14 +31,15 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protect /dashboard and /api/reports routes
-  if (
-    !user &&
-    (request.nextUrl.pathname.startsWith('/dashboard') ||
-     request.nextUrl.pathname.startsWith('/api/reports'))
-  ) {
+  // Everything except the sign-in page needs a signed-in user: pages redirect to /login, API routes answer 401.
+  const path = request.nextUrl.pathname
+  if (!user && path !== '/login') {
+    if (path.startsWith('/api/')) {
+      return NextResponse.json({ error: 'Sign in to continue.' }, { status: 401 })
+    }
     const url = request.nextUrl.clone()
     url.pathname = '/login'
+    url.search = ''
     return NextResponse.redirect(url)
   }
 

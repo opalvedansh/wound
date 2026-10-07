@@ -15,10 +15,14 @@ export interface Flag {
 
 export interface ClassResult {
   label: string;
-  /** Calibrated probability of `label`. */
-  prob: number;
+  /** Calibrated probability of `label`; null when a clinical rule decided it, not the model. */
+  prob: number | null;
   /** Top alternatives, most likely first. */
   top: [string, number][];
+  /** Set when a flowchart rule decided the label (e.g. "diabetes and a foot location"). */
+  rule?: string;
+  /** The model's own guess, kept beside a rule's answer. */
+  model?: ClassResult | null;
 }
 
 export interface Measurement {
@@ -96,7 +100,8 @@ export const filterIntake = (answers: Record<string, unknown>, questions: Intake
 /** Below this calibrated probability a classification is reported as uncertain (same as report.py). */
 export const UNCERTAIN_BELOW = 0.7;
 
-export const isUncertain = (result: ClassResult | undefined): boolean => result !== undefined && result.prob < UNCERTAIN_BELOW;
+export const isUncertain = (result: ClassResult | undefined): boolean =>
+  result !== undefined && !result.rule && result.prob !== null && result.prob < UNCERTAIN_BELOW;
 
 /** Display names for the model's wound-type labels (same as report.py). */
 export const WOUND_TYPE_LABEL: Record<string, string> = {
@@ -161,6 +166,28 @@ export interface VisitOutcome {
   /** Retake: what to fix in the photo. */
   issues?: string[];
   flags?: Flag[];
+}
+
+/** A draft no clinician has reviewed yet. */
+export interface QueueItem {
+  aiResultId: string;
+  caseId: string;
+  caseLocation: string;
+  patient: { id: string; firstName: string; lastName: string; patientId: string };
+  takenAt: string;
+  urgentFlags: number;
+  reviewFlags: number;
+  areaCm2: number | null;
+}
+
+/** The dashboard: counts for the signed-in clinician, and the drafts waiting for review (urgent first). */
+export interface Overview {
+  patients: number;
+  openWounds: number;
+  visitsThisWeek: number;
+  awaitingReview: number;
+  urgentAwaitingReview: number;
+  queue: QueueItem[];
 }
 
 export interface PatientSummary {

@@ -1,0 +1,36 @@
+# Render blueprint for the NestJS API (apps/api). The web portal goes on Vercel (vercel.json) and the model on a
+# Hugging Face Space (wound-ai/Dockerfile); see docs/deploy.md. Secrets are entered in the Render dashboard
+# (`sync: false`), never committed.
+services:
+  - type: web
+    name: wound-api
+    runtime: node
+    plan: free
+    region: singapore
+    # Applies pending database migrations on every deploy, before the new API starts.
+    buildCommand: npm ci && npx prisma generate && npx prisma migrate deploy && npx nx build api
+    startCommand: node dist/apps/api/main.js
+    healthCheckPath: /api
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NX_DAEMON
+        value: "false"
+      - key: NX_NO_CLOUD
+        value: "true"
+      - key: DATABASE_URL # Supabase session pooler (port 5432)
+        sync: false
+      - key: DIRECT_URL # same as DATABASE_URL; used by migrations
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_JWKS_URL # <SUPABASE_URL>/auth/v1/.well-known/jwks.json
+        sync: false
+      - key: WOUND_API_URL # the Hugging Face Space URL
+        sync: false
+      - key: WOUND_API_KEY # same value as the Space's WOUND_API_KEY secret
+        sync: false
+      - key: CORS_ORIGINS # the Vercel URL of the web portal
+        sync: false

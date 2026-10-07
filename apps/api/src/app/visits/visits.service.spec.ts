@@ -42,7 +42,7 @@ const OK: AnalyzeResponse = {
 
 const DAY = 86_400_000;
 
-function setup(options: { findings?: AnalyzeResponse; transactionFails?: boolean; aiResult?: unknown } = {}) {
+function setup(options: { findings?: AnalyzeResponse; transactionFails?: boolean; aiResult?: unknown; patient?: unknown } = {}) {
   const woundCase = {
     id: 'c1',
     ownerId: 'u1',
@@ -64,12 +64,20 @@ function setup(options: { findings?: AnalyzeResponse; transactionFails?: boolean
         where.id === woundCase.id && where.patient.userId === woundCase.ownerId ? woundCase : null,
       ),
     },
-    $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
-    aIResult: { findFirst: jest.fn(async () => options.aiResult ?? null) },
+    // Interactive transactions get the fake `tx`; batched ones are a list of queries.
+    $transaction: jest.fn(async (arg: ((t: typeof tx) => unknown) | Promise<unknown>[]) => (typeof arg === 'function' ? arg(tx) : Promise.all(arg))),
+    aIResult: { findFirst: jest.fn(async () => options.aiResult ?? null), deleteMany: jest.fn(async () => ({ count: 1 })) },
     aIReview: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...data, createdAt: new Date('2026-10-08T11:00:00Z') })),
+      deleteMany: jest.fn(async () => ({ count: 1 })),
     },
+    image: { deleteMany: jest.fn(async () => ({ count: 1 })) },
+    clinicalAssessment: { deleteMany: jest.fn(async () => ({ count: 0 })) },
+    phase: { deleteMany: jest.fn(async () => ({ count: 2 })) },
+    treatment: { delete: jest.fn(async () => ({})), deleteMany: jest.fn(async () => ({ count: 1 })) },
+    patient: { findFirst: jest.fn(async () => options.patient ?? null), delete: jest.fn(async () => ({})), count: jest.fn(async () => 3) },
   };
+  Object.assign(prisma.case, { deleteMany: jest.fn(async () => ({ count: 1 })) });
   const model = {
     questions: jest.fn(async () => CORE),
     followUps: jest.fn(async () => FOLLOW_UPS),
@@ -198,5 +206,75 @@ describe('VisitsService.review', () => {
     await expect(
       service.review(user, 'r1', { decision: 'approved', finalReport: null, reason: null, corrections: null }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('deleting', () => {
+  const visit = {
+    id: 'r1',
+    phase: {
+      treatmentId: 't1',
+      treatment: { phases: [{ image: { imageUrl: 'treatments/t1/pre.jpg' } }, { image: null }] },
+    },
+  };
+
+  it('a visit goes with its records, then its photo', async () => {
+    const { service, prisma, storage } = setup({ aiResult: visit });
+    await service.removeVisit(user, 'r1');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.treatment.delete).toHaveBeenCalledWith({ where: { id: 't1' } });
+    expect(storage.remove).toHaveBeenCalledWith(['treatments/t1/pre.jpg']);
+  });
+
+  it("another user's visit is not found and nothing is deleted", async () => {
+    const { service, prisma, storage } = setup({ aiResult: null });
+    await expect(service.removeVisit({ ...user, id: 'u2' }, 'r1')).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('a patient goes with every wound, visit and photo', async () => {
+    const patient = {
+      id: 'p1',
+      cases: [
+        { treatments: [{ phases: [{ image: { imageUrl: 'treatments/a/pre.jpg' } }] }] },
+        { treatments: [{ phases: [{ image: { imageUrl: 'treatments/b/pre.jpg' } }, { image: null }] }] },
+      ],
+    };
+    const { service, prisma, storage } = setup({ patient });
+    await service.removePatient(user, 'p1');
+    expect(prisma.patient.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'p1', userId: 'u1' } }));
+    expect(prisma.patient.delete).toHaveBeenCalledWith({ where: { id: 'p1' } });
+    expect(storage.remove).toHaveBeenCalledWith(['treatments/a/pre.jpg', 'treatments/b/pre.jpg']);
+  });
+
+  it("another user's patient is not found", async () => {
+    const { service, prisma } = setup({ patient: null });
+    await expect(service.removePatient(user, 'p1')).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('VisitsService.overview', () => {
+  it('counts the clinician\'s records and lists unreviewed drafts, urgent first', async () => {
+    const { service, prisma } = setup();
+    const patient = { id: 'p1', firstName: 'Test', lastName: 'Patient', patientId: 'MRN-1' };
+    const result = (id: string, daysAgo: number, levels: string[], reviewed = false) => ({
+      id,
+      createdAt: new Date(Date.parse('2026-10-08T12:00:00Z') - daysAgo * DAY),
+      area: null,
+      findings: { status: 'ok', flags: levels.map((level) => ({ level, text: level })) },
+      review: reviewed ? { id: 'rv' } : null,
+      phase: { treatment: { case: { id: 'c1', location: 'Left heel', patient } } },
+    });
+    Object.assign(prisma.case, { count: jest.fn(async () => 2) });
+    Object.assign(prisma.aIResult, {
+      findMany: jest.fn(async () => [result('new', 1, ['review']), result('urgent', 3, ['urgent', 'review']), result('done', 2, [], true), result('old', 10, [])]),
+    });
+
+    const overview = await service.overview(user, new Date('2026-10-08T12:00:00Z'));
+    expect(overview).toEqual(expect.objectContaining({ patients: 3, openWounds: 2, visitsThisWeek: 3, awaitingReview: 3, urgentAwaitingReview: 1 }));
+    expect(overview.queue.map((q) => q.aiResultId)).toEqual(['urgent', 'new', 'old']);
+    expect(overview.queue[0]).toEqual(expect.objectContaining({ caseId: 'c1', caseLocation: 'Left heel', urgentFlags: 1, reviewFlags: 1 }));
   });
 });

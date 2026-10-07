@@ -1,6 +1,6 @@
 "use client"
 import { useState, type ReactNode } from "react";
-import { AlertOctagon, AlertTriangle, CheckCircle2, PencilLine, XCircle } from "lucide-react";
+import { AlertOctagon, AlertTriangle, CheckCircle2, PencilLine, Trash2, XCircle } from "lucide-react";
 import {
   isUncertain,
   woundTypeName,
@@ -43,6 +43,10 @@ export function WoundOverlay({ src, outline }: { src: string; outline?: Outline 
 /** A classification as the report writes it: a confident label, or UNCERTAIN with the top estimates. */
 function classText(result: ClassResult | undefined, name: (label: string) => string): string {
   if (!result) return "Not assessed yet (model not installed)";
+  if (result.rule) {
+    return `${name(result.label)} (by rule: ${result.rule}${result.model ? `; model estimate: ${classText(result.model, name)}` : ""})`;
+  }
+  if (result.prob === null) return name(result.label);
   if (isUncertain(result)) {
     return `Uncertain — top estimates: ${result.top.map(([label, p]) => `${name(label)} ${pct(p)}`).join(", ")}`;
   }
@@ -162,8 +166,46 @@ function ReviewPanel({ visit, onReviewed }: { visit: VisitView; onReviewed: (rev
   );
 }
 
+/** Deletes the visit and its photo after a confirmation; there is no undo. */
+function DeleteVisit({ visit, onDeleted }: { visit: VisitView; onDeleted: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string>();
+  const remove = async () => {
+    if (!window.confirm("Delete this visit, its photo and its review? This can't be undone.")) return;
+    setBusy(true);
+    setProblem(undefined);
+    try {
+      await api<void>(`/visits/${visit.aiResultId}`, { method: "DELETE" });
+      onDeleted();
+    } catch (e) {
+      setProblem(errorMessage(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-black/5 pt-3 dark:border-white/10">
+      <button type="button" disabled={busy} onClick={() => void remove()} className="inline-flex items-center gap-1.5 text-sm font-medium text-destructive hover:underline disabled:opacity-50">
+        <Trash2 className="w-4 h-4" /> {busy ? "Deleting…" : "Delete visit"}
+      </button>
+      {problem && (
+        <span role="alert" className="text-sm text-destructive">
+          {problem}
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** One analysed photo: flags first, the outlined photo, the findings, the draft, and the review. */
-export function VisitResult({ visit, onReviewed }: { visit: VisitView; onReviewed: (review: ReviewView) => void }) {
+export function VisitResult({
+  visit,
+  onReviewed,
+  onDeleted,
+}: {
+  visit: VisitView;
+  onReviewed: (review: ReviewView) => void;
+  onDeleted?: () => void;
+}) {
   const f = visit.findings;
   const m = f.measurement;
   const change = f.change?.percent_area_reduction;
@@ -267,6 +309,7 @@ export function VisitResult({ visit, onReviewed }: { visit: VisitView; onReviewe
           <ReviewPanel visit={visit} onReviewed={onReviewed} />
         </>
       )}
+      {onDeleted && <DeleteVisit visit={visit} onDeleted={onDeleted} />}
     </div>
   );
 }

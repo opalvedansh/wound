@@ -14,6 +14,8 @@ import {
   type CaseView,
   type IntakeAnswers,
   type IntakeQuestion,
+  type Overview,
+  type QueueItem,
   type ReviewView,
   type VisitOutcome,
 } from '@antigravity-project-spec-pack/domain/wound-model';
@@ -169,6 +171,96 @@ export class VisitsService {
       await this.storage.remove(path);
       throw error;
     }
+  }
+
+  async overview(user: AuthUser, now = new Date()): Promise<Overview> {
+    const mine = { patient: { userId: user.id } };
+    const [patients, openWounds, results] = await Promise.all([
+      this.prisma.patient.count({ where: { userId: user.id } }),
+      this.prisma.case.count({ where: mine }),
+      this.prisma.aIResult.findMany({
+        where: { phase: { treatment: { case: mine } } },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          createdAt: true,
+          area: true,
+          findings: true,
+          review: { select: { id: true } },
+          phase: { select: { treatment: { select: { case: { select: { id: true, location: true, patient: true } } } } } },
+        },
+      }),
+    ]);
+    const weekAgo = now.getTime() - 7 * 86_400_000;
+    const queue: QueueItem[] = results
+      .filter((r) => !r.review)
+      .map((r) => {
+        const flags = ((r.findings as { flags?: { level: string }[] } | null)?.flags ?? []);
+        const c = r.phase.treatment.case;
+        return {
+          aiResultId: r.id,
+          caseId: c.id,
+          caseLocation: c.location,
+          patient: { id: c.patient.id, firstName: c.patient.firstName, lastName: c.patient.lastName, patientId: c.patient.patientId },
+          takenAt: r.createdAt.toISOString(),
+          urgentFlags: flags.filter((f) => f.level === 'urgent').length,
+          reviewFlags: flags.filter((f) => f.level === 'review').length,
+          areaCm2: r.area,
+        };
+      })
+      // Urgent first, then newest (the list is already newest first and sort is stable).
+      .sort((a, b) => Number(b.urgentFlags > 0) - Number(a.urgentFlags > 0));
+    return {
+      patients,
+      openWounds,
+      visitsThisWeek: results.filter((r) => r.createdAt.getTime() >= weekAgo).length,
+      awaitingReview: queue.length,
+      urgentAwaitingReview: queue.filter((q) => q.urgentFlags > 0).length,
+      queue,
+    };
+  }
+
+  /** Deletes a visit (its treatment, phases, results, review) and then its photos. */
+  async removeVisit(user: AuthUser, aiResultId: string): Promise<void> {
+    const result = await this.prisma.aIResult.findFirst({
+      where: { id: aiResultId, phase: { treatment: { case: { patient: { userId: user.id } } } } },
+      include: { phase: { include: { treatment: { include: { phases: { include: { image: true } } } } } } },
+    });
+    if (!result) throw new NotFoundException('Result not found.');
+    const treatmentId = result.phase.treatmentId;
+    const paths = result.phase.treatment.phases.flatMap((p) => (p.image ? [p.image.imageUrl] : []));
+    const inTreatment = { phase: { treatmentId } };
+    await this.prisma.$transaction([
+      this.prisma.aIReview.deleteMany({ where: { aiResult: inTreatment } }),
+      this.prisma.aIResult.deleteMany({ where: inTreatment }),
+      this.prisma.image.deleteMany({ where: inTreatment }),
+      this.prisma.clinicalAssessment.deleteMany({ where: inTreatment }),
+      this.prisma.phase.deleteMany({ where: { treatmentId } }),
+      this.prisma.treatment.delete({ where: { id: treatmentId } }),
+    ]);
+    await this.storage.remove(paths);
+  }
+
+  /** Deletes a patient with every wound, visit and photo. */
+  async removePatient(user: AuthUser, patientId: string): Promise<void> {
+    const patient = await this.prisma.patient.findFirst({
+      where: { id: patientId, userId: user.id },
+      include: { cases: { include: { treatments: { include: { phases: { include: { image: true } } } } } } },
+    });
+    if (!patient) throw new NotFoundException('Patient not found.');
+    const paths = patient.cases.flatMap((c) => c.treatments.flatMap((t) => t.phases.flatMap((p) => (p.image ? [p.image.imageUrl] : []))));
+    const inPatient = { phase: { treatment: { case: { patientId } } } };
+    await this.prisma.$transaction([
+      this.prisma.aIReview.deleteMany({ where: { aiResult: inPatient } }),
+      this.prisma.aIResult.deleteMany({ where: inPatient }),
+      this.prisma.image.deleteMany({ where: inPatient }),
+      this.prisma.clinicalAssessment.deleteMany({ where: inPatient }),
+      this.prisma.phase.deleteMany({ where: { treatment: { case: { patientId } } } }),
+      this.prisma.treatment.deleteMany({ where: { case: { patientId } } }),
+      this.prisma.case.deleteMany({ where: { patientId } }),
+      this.prisma.patient.delete({ where: { id: patientId } }),
+    ]);
+    await this.storage.remove(paths);
   }
 
   async review(user: AuthUser, aiResultId: string, input: ReviewInput): Promise<ReviewView> {

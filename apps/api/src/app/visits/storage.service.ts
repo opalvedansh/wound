@@ -21,13 +21,15 @@ export class StorageService {
     }
   }
 
-  /** Best effort: used to clean up after a failed save, so it never throws. */
-  async remove(path: string): Promise<void> {
+  /** Best effort, so it never throws: used after the records are already gone. Failures are logged by path count only. */
+  async remove(paths: string | string[]): Promise<void> {
+    const list = Array.isArray(paths) ? paths : [paths];
+    if (list.length === 0) return;
     try {
-      const { error } = await this.bucket().remove([path]);
-      if (error) this.logger.warn(`Couldn't remove a photo: ${error.message}`);
+      const { error } = await this.bucket().remove(list);
+      if (error) this.logger.warn(`Couldn't remove ${list.length} photo(s): ${error.message}`);
     } catch (error) {
-      this.logger.warn(`Couldn't remove a photo: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(`Couldn't remove ${list.length} photo(s): ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

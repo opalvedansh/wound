@@ -80,7 +80,11 @@ function CaseDetail() {
               </button>
               {expanded && (
                 <div className="border-t border-black/5 p-4 dark:border-white/10">
-                  <VisitResult visit={visit} onReviewed={(review) => reviewed(visit.aiResultId, review)} />
+                  <VisitResult
+                    visit={visit}
+                    onReviewed={(review) => reviewed(visit.aiResultId, review)}
+                    onDeleted={() => setData({ ...woundCase, visits: woundCase.visits.filter((v) => v.aiResultId !== visit.aiResultId) })}
+                  />
                 </div>
               )}
             </article>

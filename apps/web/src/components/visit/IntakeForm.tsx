@@ -74,7 +74,8 @@ export function IntakeForm({
                   <input
                     id={id}
                     type="number"
-                    inputMode="numeric"
+                    inputMode="decimal"
+                    step="any"
                     min={0}
                     max={/0 \(none\) to 10/.test(q.text) ? 10 : undefined}
                     className={`${fieldClass} max-w-40`}
