@@ -16,10 +16,16 @@ import json
 import re
 from datetime import datetime, timezone
 
+from .intake import FOOT_SITES, LEG_AND_FOOT_SITES, SPECIAL_BURN_SITES
+
 DISCLAIMER = ("AI-generated draft for review by a qualified clinician. It is not a diagnosis and must not be used "
               "to start, stop or change treatment without clinical assessment.")
 
 UNCERTAIN_BELOW = 0.70  # calibrated probability below which a classification is reported as uncertain
+ABPI_LOW = 0.8  # below: arterial or mixed disease possible (guidelines differ; clinician sets the threshold)
+ABPI_HIGH = 1.3  # above: arteries may be calcified, so the reading can be falsely reassuring
+# Prefix of every danger-sign flag (Chart 1): the report then opens with "Emergency care now".
+DANGER = "Danger sign"
 
 LABELS = {
     "diabetic": "Diabetic foot ulcer", "pressure": "Pressure injury", "venous": "Venous leg ulcer",
@@ -41,18 +47,42 @@ def red_flags(f: dict) -> list[dict]:
     def add(level, text):
         flags.append({"level": level, "text": text})
 
-    if a.get("diabetes") == "yes" and (t.get("necrosis", 0) > 0 or a.get("foot_cold_or_dark") == "yes"):
-        add("urgent", "Dark/necrotic tissue or a cold, discoloured foot in a person with diabetes: "
-                      "same-day assessment by a diabetic foot or vascular team.")
+    # Chart 1: danger signs first. Each one means same-day care, whatever the wound type.
+    if a.get("foot_cold_or_dark") == "yes":
+        add("urgent", f"{DANGER}: a cold, pale or darkening foot or toes (possible gangrene or critical ischaemia): "
+                      "same-day vascular or diabetic foot team.")
+    elif a.get("diabetes") == "yes" and t.get("necrosis", 0) > 0:
+        add("urgent", f"{DANGER}: dark/necrotic tissue in a person with diabetes: same-day assessment by a diabetic "
+                      "foot or vascular team.")
     if a.get("fever") == "yes" and (a.get("redness_spreading") == "yes" or a.get("discharge") == "thick_yellow_or_green"):
-        add("urgent", "Fever with spreading redness or pus: possible spreading infection, needs urgent medical review.")
+        add("urgent", f"{DANGER}: fever with spreading redness or pus: possible spreading infection, needs urgent "
+                      "medical review.")
     elif a.get("redness_spreading") == "yes":
         add("review", "Redness or swelling reported as spreading: clinician review within 24 hours.")
     if wt == "burn" or a.get("cause") == "burn":
         if a.get("burn_agent") in ("chemical", "electrical"):
-            add("urgent", "Chemical or electrical burn: refer to a burns unit; surface appearance can underestimate damage.")
+            add("urgent", f"{DANGER}: chemical or electrical burn: refer to a burns unit; surface appearance can "
+                          "underestimate damage.")
+        if a.get("body_location") in SPECIAL_BURN_SITES:
+            add("urgent", f"{DANGER}: burn on the face, neck, hands or feet: refer to a burns unit.")
+        if a.get("burn_other_sites") == "yes":
+            add("urgent", f"{DANGER}: burns on more than one body area: estimate the total area and refer to a burns unit.")
         if sev.get("burn_depth", {}).get("label") in ("deep_partial", "full_thickness"):
             add("urgent", "Possible deep burn: burns specialist assessment.")
+
+    # Charts 2 and 3: a photo cannot show blood flow, so leg and foot ulcers say so until a clinician enters an ABPI.
+    acute = a.get("cause") in ("burn", "surgery", "injury_cut_or_fall")
+    leg_or_foot = a.get("body_location") in LEG_AND_FOOT_SITES
+    if leg_or_foot and (not acute or wt == "diabetic"):
+        abpi = _number(a.get("abpi"))
+        if abpi is None:
+            add("review", "Blood flow not assessed: check foot pulses and ABPI before any compression.")
+        elif abpi < ABPI_LOW:
+            add("urgent", f"ABPI {abpi} is below {ABPI_LOW}: arterial or mixed disease possible. Vascular review "
+                          "before any compression.")
+        elif abpi > ABPI_HIGH:
+            add("review", f"ABPI {abpi} is above {ABPI_HIGH}: arteries may be calcified (common in diabetes and kidney "
+                          "disease), so the reading can be falsely reassuring. Check toe pressures.")
     if a.get("wound_opening") == "yes":
         add("review", "Surgical wound reported as opening: contact the operating team.")
     pct = chg.get("percent_area_reduction")
@@ -68,12 +98,27 @@ def red_flags(f: dict) -> list[dict]:
     return flags
 
 
+def _number(value) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def has_danger_signs(flags: list[dict]) -> bool:
+    return any(fl["level"] == "urgent" and fl["text"].startswith(DANGER) for fl in flags)
+
+
 # --------------------------------------------------------------------------- template report
 
 def _fmt_class(entry: dict | None) -> str:
     if not entry:
         return "not assessed"
     label = LABELS.get(entry["label"], entry["label"].replace("_", " "))
+    if entry.get("rule"):
+        model = entry.get("model")
+        guess = f"; model estimate {_fmt_class(model)}" if model else ""
+        return f"{label} (by rule: {entry['rule']}{guess})"
     p = entry.get("prob")
     if p is None:
         return label
@@ -86,7 +131,9 @@ def _fmt_class(entry: dict | None) -> str:
 def template_narrative(f: dict) -> str:
     parts = []
     wt = f.get("wound_type")
-    if wt and wt.get("prob", 0) >= UNCERTAIN_BELOW:
+    if wt and wt.get("rule"):
+        parts.append(f"Recorded as {LABELS.get(wt['label'], wt['label']).lower()} because of {wt['rule']}.")
+    elif wt and (wt.get("prob") or 0) >= UNCERTAIN_BELOW:
         parts.append(f"Appearance is most consistent with {LABELS.get(wt['label'], wt['label']).lower()}.")
     elif wt:
         parts.append("The wound type could not be determined with confidence from the photo.")
@@ -113,6 +160,10 @@ def render_report(f: dict, narrative: str | None = None) -> str:
         "# Wound assessment (AI-assisted draft)",
         f"_{DISCLAIMER}_",
         "",
+    ]
+    if has_danger_signs(flags):
+        lines += ["**Emergency care now: do not wait for this report.** Danger signs are listed under Flags.", ""]
+    lines += [
         f"Generated: {f.get('timestamp', datetime.now(timezone.utc).isoformat(timespec='minutes'))}",
         "",
         "## Flags",

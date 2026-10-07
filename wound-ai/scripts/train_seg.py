@@ -71,7 +71,8 @@ def main():
     a = parse()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # NVIDIA GPU (Kaggle), then Apple GPU (a Mac), then CPU. Mixed precision stays CUDA-only.
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     binary = a.task == "boundary"
     k = 1 if binary else len(TISSUE_CLASSES)
     mask_col = "mask_path" if binary else "tissue_path"

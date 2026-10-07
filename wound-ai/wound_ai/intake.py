@@ -34,7 +34,15 @@ CORE_QUESTIONS = [
      "options": ["yes", "no", "not_sure"], "used_by": ["red flags"]},
     {"id": "current_treatment", "text": "Current dressing or treatment (free text)", "type": "text",
      "used_by": ["report"]},
+    {"id": "abpi", "text": "ABPI (ankle-brachial pressure index), if measured. Leave blank if not.", "type": "number",
+     "used_by": ["blood-flow flag for leg and foot ulcers"]},
 ]
+
+# Body sites where the flowcharts apply the diabetic-foot rule (Chart 1) and the blood-flow check (Charts 2 and 3).
+FOOT_SITES = {"foot_plantar", "foot_dorsal", "toe", "heel"}
+LEG_AND_FOOT_SITES = FOOT_SITES | {"ankle", "lower_leg"}
+# Burns here go to a burns unit whatever their size (Chart 1 danger signs).
+SPECIAL_BURN_SITES = {"head_neck", "hand"} | FOOT_SITES
 
 FOLLOW_UPS = {
     "burn": [

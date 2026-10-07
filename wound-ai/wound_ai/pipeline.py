@@ -21,6 +21,7 @@ import numpy as np
 import torch
 
 from .data import IMAGENET_MEAN, IMAGENET_STD, TISSUE_CLASSES, MetaEncoder, crop_to_wound, read_rgb
+from .intake import FOOT_SITES
 from .measure import area_change, find_marker, measure_wound
 from .models import WoundClassifier, build_seg_model
 from .quality import check_quality
@@ -30,6 +31,16 @@ SEVERITY_HEADS = {"pu_stage": "pressure", "burn_depth": "burn", "dfu_infection":
 WOUND_BED = ["granulation", "slough", "necrosis", "epithelial"]
 # Outline regions smaller than this share of the photo are specks, not wound (works without a sticker).
 MIN_OUTLINE_FRAC = 0.0005
+
+
+def apply_diabetic_foot_rule(wound_type: dict | None, intake: dict) -> dict | None:
+    """Chart 1: any foot wound in a person with diabetes is a diabetic foot ulcer, whatever the photo looks like.
+    The classifier's own guess, if there is one, is kept beside the rule's answer."""
+    if intake.get("diabetes") != "yes" or intake.get("body_location") not in FOOT_SITES:
+        return wound_type
+    if wound_type and wound_type.get("label") == "diabetic":
+        return {**wound_type, "rule": "diabetes and a foot location"}
+    return {"label": "diabetic", "prob": None, "top": [], "rule": "diabetes and a foot location", "model": wound_type}
 
 
 def mask_outline(mask: np.ndarray | None) -> list[list[list[float]]] | None:
@@ -147,6 +158,7 @@ class WoundAnalyzer:
         crop = crop_to_wound(img, mask)
         if "wound_type" in self.cls:
             f["wound_type"] = self._classify(crop, "wound_type", intake)
+        f["wound_type"] = apply_diabetic_foot_rule(f.get("wound_type"), intake)
         wt = (f.get("wound_type") or {}).get("label")
         f["severity"] = {}
         for head, applies_to in SEVERITY_HEADS.items():

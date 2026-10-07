@@ -67,7 +67,8 @@ def main():
     a = parse()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # NVIDIA GPU (Kaggle), then Apple GPU (a Mac), then CPU. Mixed precision stays CUDA-only.
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     df = pd.read_csv(a.manifest)
     df = df[df[a.target].notna()]
     df[a.target] = df[a.target].astype(str)

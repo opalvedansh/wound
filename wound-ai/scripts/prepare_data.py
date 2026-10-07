@@ -124,6 +124,8 @@ def main():
     df = df.groupby("image_path", as_index=False).first()
 
     no_pid = df.patient_id.isna()
+    # An all-empty column is read as float; pandas 3 won't put text into it, so make it text first.
+    df["patient_id"] = df["patient_id"].astype(object)
     if no_pid.any():
         groups = group_near_duplicates(df.loc[no_pid, "image_path"].tolist())
         df.loc[no_pid, "patient_id"] = [f"auto_{g}" for g in groups]

@@ -80,3 +80,4 @@ wound-ai/data/
 wound-ai/runs/
 wound-ai/reports/
 wound-ai/markers.pdf
+wound-ai/*.log
