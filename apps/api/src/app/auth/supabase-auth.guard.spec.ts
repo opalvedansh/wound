@@ -1,4 +1,5 @@
 import { ForbiddenException, ServiceUnavailableException, UnauthorizedException, type ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 
 jest.mock('jose', () => {
   class JOSEError extends Error {}
@@ -11,7 +12,7 @@ jest.mock('jose', () => {
 });
 
 import { errors, jwtVerify } from 'jose';
-import { AdminGuard, SupabaseAuthGuard, type AuthenticatedRequest } from './supabase-auth.guard';
+import { AdminGuard, Public, SupabaseAuthGuard, type AuthenticatedRequest } from './supabase-auth.guard';
 
 const verify = jwtVerify as unknown as jest.Mock;
 
@@ -72,6 +73,30 @@ describe('SupabaseAuthGuard', () => {
     await expect(new SupabaseAuthGuard().canActivate(contextFor(withToken()))).rejects.toBeInstanceOf(UnauthorizedException);
     verify.mockResolvedValueOnce({ payload: { app_metadata: { role: 'admin' } } });
     await expect(new SupabaseAuthGuard().canActivate(contextFor(withToken()))).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('is on for every route unless the route or its controller is marked @Public()', async () => {
+    @Public()
+    class OpenController {
+      route() {}
+    }
+    class ClosedController {
+      route() {}
+      @Public()
+      open() {}
+    }
+    const routeContext = (Class: new () => object, handler: string) =>
+      ({
+        ...contextFor({ headers: {} }),
+        getClass: () => Class,
+        getHandler: () => (Class.prototype as Record<string, unknown>)[handler],
+      }) as unknown as ExecutionContext;
+    const guard = new SupabaseAuthGuard(new Reflector());
+
+    await expect(guard.canActivate(routeContext(OpenController, 'route'))).resolves.toBe(true);
+    await expect(guard.canActivate(routeContext(ClosedController, 'open'))).resolves.toBe(true);
+    await expect(guard.canActivate(routeContext(ClosedController, 'route'))).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(verify).not.toHaveBeenCalled();
   });
 
   it("answers 503, not 401, when Supabase's keys can't be fetched", async () => {

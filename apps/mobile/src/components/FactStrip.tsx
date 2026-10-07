@@ -6,6 +6,7 @@ import { colors, radii } from '../lib/theme';
 export interface Fact {
   label: string;
   value: string;
+  valueColor?: string;
   /** A second, quieter line under the value, such as how long ago a date was. */
   detail?: string;
   detailColor?: string;
@@ -19,7 +20,7 @@ export const FactStrip = ({ facts, style }: { facts: Fact[]; style?: StyleProp<V
     {facts.map((fact, i) => (
       <View key={fact.label} style={[styles.fact, { flex: fact.flex ?? 1 }, i > 0 && styles.divider]}>
         <Text style={styles.label}>{fact.label}</Text>
-        <Text style={styles.value}>{fact.value}</Text>
+        <Text style={[styles.value, fact.valueColor !== undefined && { color: fact.valueColor }]}>{fact.value}</Text>
         {fact.detail !== undefined && (
           <Text style={[styles.detail, fact.detailColor !== undefined && { color: fact.detailColor }]}>{fact.detail}</Text>
         )}

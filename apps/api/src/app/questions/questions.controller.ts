@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { QUESTION_FORMS, type QuestionChanges, type QuestionForm } from '@antigravity-project-spec-pack/domain/questions';
-import { AdminGuard, SupabaseAuthGuard, type AuthenticatedRequest } from '../auth/supabase-auth.guard';
+import { AdminGuard, type AuthenticatedRequest } from '../auth/supabase-auth.guard';
 import { QuestionsService } from './questions.service';
 
 const formFrom = (value: unknown): QuestionForm => {
@@ -16,10 +16,9 @@ const changesFrom = (body: unknown): QuestionChanges => {
 
 const userId = (request: AuthenticatedRequest) => request.user?.id ?? '';
 
-/** The questions the mobile app asks. Anyone signed in can read them; only admins can change them. */
+/** The questions the mobile app asks. Anyone signed in can read them (app-wide guard); only admins can change them. */
 @ApiTags('questions')
 @ApiBearerAuth()
-@UseGuards(SupabaseAuthGuard)
 @Controller('questions')
 export class QuestionsController {
   constructor(private readonly questions: QuestionsService) {}

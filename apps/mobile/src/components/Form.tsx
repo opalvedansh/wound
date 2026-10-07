@@ -228,6 +228,38 @@ export const ChoiceChips = ({
   );
 };
 
+/** A yes/no choice with a sentence of explanation, such as a consent or a report option. */
+export const CheckRow = ({
+  label,
+  description,
+  value,
+  onChange,
+  invalid = false,
+}: {
+  label: string;
+  description?: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
+  invalid?: boolean;
+}) => (
+  <Pressable
+    accessibilityRole="checkbox"
+    aria-checked={value}
+    accessibilityLabel={label}
+    accessibilityHint={description}
+    onPress={() => onChange(!value)}
+    style={(state) => [styles.checkRow, interactionStyle(state, styles.chipHover, styles.chipPressed)]}
+  >
+    <View style={[styles.checkBox, value && styles.checkBoxOn, invalid && !value && styles.chipInvalid]}>
+      {value && <Feather name="check" size={14} color={colors.surface} />}
+    </View>
+    <View style={styles.checkText}>
+      <Text style={styles.checkLabel}>{label}</Text>
+      {description !== undefined && <Text style={styles.checkDescription}>{description}</Text>}
+    </View>
+  </Pressable>
+);
+
 const DatePart = ({ label, style, ...props }: TextFieldProps & { label: string }) => (
   <View>
     <Text style={styles.partLabel}>{label}</Text>
@@ -344,6 +376,46 @@ const styles = StyleSheet.create({
   chipLabelOn: {
     fontWeight: '600',
     color: colors.accent,
+  },
+
+  checkRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginHorizontal: -8,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: radii.small,
+  },
+  checkBox: {
+    width: 22,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: '#9CA3AF',
+    backgroundColor: colors.surface,
+  },
+  checkBoxOn: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accent,
+  },
+  checkText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  checkLabel: {
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '500',
+    color: colors.textPrimary,
+  },
+  checkDescription: {
+    marginTop: 2,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textMuted,
   },
 
   messageRow: {

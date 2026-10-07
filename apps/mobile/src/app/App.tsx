@@ -10,6 +10,7 @@ import { PatientIntakeScreen } from '../screens/PatientIntakeScreen';
 import { CaseDetailScreen } from '../screens/CaseDetailScreen';
 import { ClinicalAssessmentScreen } from '../screens/ClinicalAssessmentScreen';
 import { CameraScreen } from '../screens/CameraScreen';
+import { CaptureGuideScreen } from '../screens/CaptureGuideScreen';
 import { AIResultScreen } from '../screens/AIResultScreen';
 
 // Missing M01-M19 screens added
@@ -71,6 +72,7 @@ export const App = () => {
 
           {/* M10 Image Capture */}
           <Stack.Screen name="Camera" component={CameraScreen} options={{ presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="CaptureGuide" component={CaptureGuideScreen} options={{ presentation: 'modal' }} />
           
           {/* M11 Image Review / Quality */}
           <Stack.Screen name="ImageReview" component={ImageReviewScreen} />

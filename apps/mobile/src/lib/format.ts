@@ -1,4 +1,4 @@
-import type { Case, RevisitAssessment } from '@antigravity-project-spec-pack/domain';
+import type { Case, CaseStatus, RevisitAssessment } from '@antigravity-project-spec-pack/domain';
 import { colors } from './theme';
 
 export type Trend = NonNullable<RevisitAssessment['woundAppearanceTrend']>;
@@ -19,6 +19,13 @@ export const TREND_COLOR: Record<Trend, string> = {
   Improving: colors.accent,
   Static: colors.textMuted,
   Deteriorating: colors.error,
+};
+
+// Each passes 4.5:1 on white, so the status word stays readable at text size.
+export const STATUS_COLOR: Record<CaseStatus, string> = {
+  healing: colors.accent,
+  review: colors.pending,
+  overdue: colors.error,
 };
 
 const DAY_MS = 86_400_000;

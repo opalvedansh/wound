@@ -3,7 +3,7 @@ import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
-import type { Treatment } from '@antigravity-project-spec-pack/domain';
+import { CASE_STATUS_LABEL, caseStatus, nextVisitDue, type Treatment } from '@antigravity-project-spec-pack/domain';
 import { ActionButton } from '../components/ActionButton';
 import { FactStrip, type Fact } from '../components/FactStrip';
 import { JourneyTrack } from '../components/JourneyTrack';
@@ -11,6 +11,7 @@ import { SyncLabel } from '../components/SyncLabel';
 import { Text } from '../components/Typography';
 import {
   CASE_STATUS,
+  STATUS_COLOR,
   TREND_COLOR,
   calendarDate,
   dayDiff,
@@ -107,12 +108,16 @@ export const CaseDetailScreen = () => {
   const woundType = [...treatments].reverse().find((t) => t.assessment?.woundType)?.assessment?.woundType;
   const onset = parseDay(woundCase.onsetDate);
   const lastVisit = parseDate(latest?.createdAt);
+  const status = caseStatus(woundCase, treatments, now);
+  const statusDetail = status?.reason ?? trend;
   const facts: Fact[] = [
     {
       label: 'Status',
-      value: CASE_STATUS[woundCase.status],
-      detail: trend,
-      detailColor: trend ? TREND_COLOR[trend] : undefined,
+      value: status ? CASE_STATUS_LABEL[status.status] : CASE_STATUS[woundCase.status],
+      valueColor: status ? STATUS_COLOR[status.status] : undefined,
+      // Why the case needs attention, otherwise the clinician's trend.
+      detail: statusDetail,
+      detailColor: status?.reason ? STATUS_COLOR[status.status] : trend ? TREND_COLOR[trend] : undefined,
       flex: 1.3,
     },
     {
@@ -152,7 +157,7 @@ export const CaseDetailScreen = () => {
         onPress: () => openTreatment(latest),
       };
     }
-    const nextVisit = parseDate(latest.therapy?.nextVisitDate);
+    const nextVisit = nextVisitDue(latest);
     return {
       title: `Treatment ${n} complete`,
       body:
@@ -217,6 +222,18 @@ export const CaseDetailScreen = () => {
                   Treatments
                 </Text>
                 <Text style={styles.sectionCount}>{treatments.length}</Text>
+                {treatments.some((t) => t.phase === 'COMPLETED') && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityHint="Choose treatments for a PDF report"
+                    hitSlop={6}
+                    onPress={() => navigation.navigate('ReportBuilder', { caseId: woundCase.id })}
+                    style={(state) => [styles.reportButton, interactionStyle(state, styles.iconButtonHover, styles.iconButtonPressed)]}
+                  >
+                    <Feather name="file-text" size={15} color={colors.accent} />
+                    <Text style={styles.reportLabel}>Report</Text>
+                  </Pressable>
+                )}
               </View>
               <View style={styles.timeline}>
                 {treatments.map((t, i) => (
@@ -256,7 +273,7 @@ const TreatmentRow = ({
 }) => {
   const done = t.phase === 'COMPLETED';
   const started = parseDate(t.createdAt);
-  const nextVisit = parseDate(t.therapy?.nextVisitDate);
+  const nextVisit = nextVisitDue(t);
   const trend = t.assessment?.woundAppearanceTrend;
   return (
     <Pressable
@@ -470,6 +487,25 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.textMuted,
     fontVariant: ['tabular-nums'],
+  },
+  reportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 6,
+    marginLeft: 'auto',
+    height: 34,
+    paddingHorizontal: 12,
+    borderRadius: radii.small,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  reportLabel: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '600',
+    color: colors.accent,
   },
 
   timeline: {

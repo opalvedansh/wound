@@ -27,19 +27,21 @@ export const captureFocus = StyleSheet.create({
   },
 });
 
-/** Close button, the phase being captured, and whose wound it is. */
+/** Close button, the phase being captured, and whose wound it is, with an optional help button opposite. */
 export const CaptureTopBar = ({
   title,
   context,
   onClose,
   closeLabel,
   closeIcon = 'x',
+  onHelp,
 }: {
   title: string;
   context?: string;
   onClose: () => void;
   closeLabel: string;
   closeIcon?: 'x' | 'chevron-left';
+  onHelp?: () => void;
 }) => (
   <View style={styles.bar}>
     <Pressable
@@ -61,8 +63,20 @@ export const CaptureTopBar = ({
         </Text>
       )}
     </View>
-    {/* Balances the close button so the title stays centred. */}
-    <View style={styles.spacer} />
+    {onHelp ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="How to take a good wound photo"
+        hitSlop={6}
+        onPress={onHelp}
+        style={(state) => [styles.button, interactionStyle(state, styles.buttonHover, styles.buttonPressed, captureFocus.ring)]}
+      >
+        <Feather name="help-circle" size={20} color={captureColors.text} />
+      </Pressable>
+    ) : (
+      // Balances the close button so the title stays centred.
+      <View style={styles.spacer} />
+    )}
   </View>
 );
 

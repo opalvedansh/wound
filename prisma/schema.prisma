@@ -31,6 +31,7 @@ model Patient {
   sex         String
   dateOfBirth DateTime
   location    String?
+  consent     Json?    // DPDP consent at registration: { care, aiTraining, noticeVersion, recordedAt }
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   cases       Case[]

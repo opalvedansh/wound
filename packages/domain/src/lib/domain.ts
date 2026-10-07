@@ -2,6 +2,19 @@ import type { QuestionResponse } from './questions';
 
 export type SyncState = 'synced' | 'pending';
 
+/** Bump when the consent wording changes, so each record shows which notice the patient agreed to. */
+export const CONSENT_NOTICE_VERSION = 'dpdp-1';
+
+/** What the patient agreed to at registration (DPDP). */
+export interface PatientConsent {
+  /** Their details, wound assessments and wound photos kept for their care. Required to register. */
+  care: boolean;
+  /** De-identified photos used to improve wound measurement. Optional. */
+  aiTraining: boolean;
+  noticeVersion: string;
+  recordedAt: string; // ISO timestamp
+}
+
 export interface Patient {
   id: string;
   firstName: string;
@@ -10,6 +23,8 @@ export interface Patient {
   sex: string;
   dob: string;
   location: string;
+  /** Missing on patients registered before consent was asked. */
+  consent?: PatientConsent;
   syncState: SyncState;
 }
 

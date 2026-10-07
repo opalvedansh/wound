@@ -3,10 +3,18 @@ import { Image, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } f
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
-import type { Case, Treatment } from '@antigravity-project-spec-pack/domain';
+import {
+  CASE_STATUS_LABEL,
+  caseStatus,
+  nextVisitDue,
+  type Case,
+  type CaseStatusResult,
+  type Treatment,
+} from '@antigravity-project-spec-pack/domain';
 import { ActionButton } from '../components/ActionButton';
 import { FactStrip } from '../components/FactStrip';
 import { JourneyTrack } from '../components/JourneyTrack';
+import { StatusLabel } from '../components/StatusLabel';
 import { SyncLabel } from '../components/SyncLabel';
 import { Text } from '../components/Typography';
 import {
@@ -48,6 +56,7 @@ interface CaseRowModel {
   number: number;
   thumbnailUri?: string;
   woundType?: string;
+  status?: CaseStatusResult;
   trend?: Trend;
   treatments: number;
   onset: string | null;
@@ -77,10 +86,11 @@ const buildCaseRows = (cases: Case[], treatments: Treatment[], stalledIds: Set<s
       number,
       thumbnailUri: imaged?.postImageUri ?? imaged?.preImageUri,
       woundType: visits.find((t) => t.assessment?.woundType)?.assessment?.woundType,
+      status: caseStatus(item, visits, now),
       trend: visits[0]?.assessment?.woundAppearanceTrend,
       treatments: visits.length,
       onset: onset ? calendarDate(onset, now) : item.onsetDate || null,
-      visit: visitLabel(parseDate(planned?.therapy?.nextVisitDate), parseDate(visits[0]?.createdAt), now),
+      visit: visitLabel(planned ? nextVisitDue(planned) : null, parseDate(visits[0]?.createdAt), now),
       syncIssue: syncIssueFor(item.id, item.syncState, stalledIds),
     };
   });
@@ -168,6 +178,20 @@ export const PatientScreen = () => {
           </View>
 
           <FactStrip facts={facts} style={styles.facts} />
+          {patient.consent ? (
+            <View style={styles.consent}>
+              <Feather name="shield" size={14} color={colors.textMuted} style={styles.consentIcon} />
+              <Text style={styles.consentText}>
+                Consent recorded {fullDate(new Date(patient.consent.recordedAt))}
+                {patient.consent.aiTraining ? ' · photos may be used, de-identified, to improve measurement' : ' · photos not used for AI'}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.consent}>
+              <Feather name="alert-circle" size={14} color={colors.pending} style={styles.consentIcon} />
+              <Text style={[styles.consentText, styles.consentMissing]}>No consent recorded for this patient</Text>
+            </View>
+          )}
 
           {hasCases ? (
             <>
@@ -215,7 +239,8 @@ export const PatientScreen = () => {
 };
 
 const CaseRow = ({ row, onPress }: { row: CaseRowModel; onPress: () => void }) => {
-  const status = CASE_STATUS[row.item.status];
+  // Healing / Needs review / Overdue once the wound has a visit; before that (or once closed) its case state.
+  const status = row.status ? CASE_STATUS_LABEL[row.status.status] : CASE_STATUS[row.item.status];
   const location = sentenceCase(row.item.woundLocation) || 'Location not recorded';
   return (
     <Pressable
@@ -240,7 +265,11 @@ const CaseRow = ({ row, onPress }: { row: CaseRowModel; onPress: () => void }) =
           </Text>
         )}
         <View style={styles.statusRow}>
-          <Text style={[styles.status, row.item.status === 'COMPLETED' && styles.statusDone]}>{status}</Text>
+          {row.status !== undefined ? (
+            <StatusLabel status={row.status.status} />
+          ) : (
+            <Text style={[styles.status, row.item.status === 'COMPLETED' && styles.statusDone]}>{status}</Text>
+          )}
           {row.trend !== undefined && <Text style={[styles.trend, { color: TREND_COLOR[row.trend] }]}>{row.trend}</Text>}
         </View>
         <View style={styles.meta}>
@@ -349,6 +378,26 @@ const styles = StyleSheet.create({
 
   facts: {
     marginTop: spacing.lg,
+  },
+  consent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginTop: 10,
+  },
+  // Centers the 14px glyph on the first 20px line if the text wraps.
+  consentIcon: {
+    marginTop: 3,
+  },
+  consentText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.textMuted,
+  },
+  consentMissing: {
+    fontWeight: '500',
+    color: colors.pending,
   },
 
   sectionHeader: {

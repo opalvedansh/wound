@@ -12,13 +12,22 @@ import { useNavigation } from '@react-navigation/native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNetInfo } from '@react-native-community/netinfo';
 import Feather from '@expo/vector-icons/Feather';
-import type { Case, Patient, Treatment } from '@antigravity-project-spec-pack/domain';
+import {
+  CASE_STATUS_LABEL,
+  caseStatus,
+  nextVisitDue,
+  worstStatus,
+  type Case,
+  type CaseStatusResult,
+  type Patient,
+  type Treatment,
+} from '@antigravity-project-spec-pack/domain';
 import { ActionButton } from '../components/ActionButton';
 import { JourneyTrack } from '../components/JourneyTrack';
+import { StatusLabel } from '../components/StatusLabel';
 import { SyncLabel } from '../components/SyncLabel';
 import { Text } from '../components/Typography';
 import {
-  CASE_STATUS,
   TREND_COLOR,
   ageFrom,
   parseDate,
@@ -56,6 +65,7 @@ interface PatientRowModel {
   thumbnailUri?: string;
   woundPrimary: string | null;
   woundSecondary?: string;
+  status?: CaseStatusResult;
   trend?: Trend;
   visit: string | null;
   syncIssue: SyncIssue;
@@ -102,9 +112,10 @@ const buildRows = (
     let woundPrimary: string | null = null;
     let woundSecondary: string | undefined;
     let trend: Trend | undefined;
+    // A patient shows the most urgent status among their open wounds.
+    const status = worstStatus(active.map((c) => caseStatus(c, byCase.get(c.id) ?? [], now)));
     if (active.length === 1) {
       woundPrimary = sentenceCase(active[0].woundLocation) || 'Wound';
-      woundSecondary = CASE_STATUS[active[0].status];
       trend = (byCase.get(active[0].id) ?? []).sort(newestFirst)[0]?.assessment?.woundAppearanceTrend;
     } else if (active.length > 1) {
       woundPrimary = plural(active.length, 'wound');
@@ -123,8 +134,9 @@ const buildRows = (
       thumbnailUri: imaged?.postImageUri ?? imaged?.preImageUri,
       woundPrimary,
       woundSecondary,
+      status,
       trend,
-      visit: visitLabel(parseDate(planned?.therapy?.nextVisitDate), parseDate(visits[0]?.createdAt), now),
+      visit: visitLabel(planned ? nextVisitDue(planned) : null, parseDate(visits[0]?.createdAt), now),
       syncIssue: syncIssueFor(patient.id, patient.syncState, stalledIds),
       search: `${name} ${patient.lastName} ${patient.firstName}`.toLowerCase(),
     };
@@ -324,7 +336,7 @@ const PatientRow = ({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${row.name}, ID ${row.patient.patientId}`}
+      accessibilityLabel={`${row.name}, ID ${row.patient.patientId}${row.status ? `, ${CASE_STATUS_LABEL[row.status.status]}` : ''}`}
       accessibilityHint="Opens the patient"
       onPress={onPress}
       style={(state) => [
@@ -353,6 +365,7 @@ const PatientRow = ({
         {row.woundPrimary !== null ? (
           <View style={styles.wound}>
             <Text style={styles.woundPrimary}>{row.woundPrimary}</Text>
+            {row.status !== undefined && <StatusLabel status={row.status.status} />}
             {!!row.woundSecondary && (
               <Text style={styles.woundSecondary} numberOfLines={1}>
                 {row.woundSecondary}

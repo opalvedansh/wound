@@ -4,10 +4,18 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
+  SetMetadata,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { createRemoteJWKSet, errors, jwtVerify } from 'jose';
+
+const IS_PUBLIC = 'isPublic';
+
+/** Opts a controller or route out of the app-wide sign-in check. Everything else needs a valid token. */
+export const Public = () => SetMetadata(IS_PUBLIC, true);
 
 export interface AuthUser {
   id: string;
@@ -26,13 +34,19 @@ export interface AuthenticatedRequest {
 /**
  * Accepts a request only with a valid Supabase access token (`Authorization: Bearer …`), checked against
  * the project's published signing keys (SUPABASE_JWKS_URL). Sets `request.user`.
+ *
+ * Registered app-wide (APP_GUARD), so a new route is protected unless it is marked `@Public()`.
  */
 @Injectable()
 export class SupabaseAuthGuard implements CanActivate {
   private readonly logger = new Logger(SupabaseAuthGuard.name);
   private keys?: ReturnType<typeof createRemoteJWKSet>;
 
+  constructor(@Optional() private readonly reflector?: Reflector) {}
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    if (this.reflector?.getAllAndOverride<boolean>(IS_PUBLIC, [context.getHandler(), context.getClass()])) return true;
+
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const header = request.headers['authorization'];
     const token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : '';

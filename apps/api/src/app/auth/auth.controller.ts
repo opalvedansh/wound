@@ -1,7 +1,10 @@
 import { Controller, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
+import { Public } from './supabase-auth.guard';
 
+// Signing in can't require being signed in.
+@Public()
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {

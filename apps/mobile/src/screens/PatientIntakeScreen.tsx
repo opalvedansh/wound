@@ -1,7 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { StyleSheet, type TextInputInstance } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { DateInput, FormField, TextField, type DateInputHandle } from '../components/Form';
+import { CONSENT_NOTICE_VERSION } from '@antigravity-project-spec-pack/domain';
+import { CheckRow, DateInput, FormField, TextField, type DateInputHandle } from '../components/Form';
 import { FormLayout } from '../components/FormLayout';
 import { Segmented } from '../components/Segmented';
 import { Text } from '../components/Typography';
@@ -17,7 +18,7 @@ const SEX_OPTIONS = [
 ] as const;
 
 type Sex = (typeof SEX_OPTIONS)[number]['value'];
-type Field = 'firstName' | 'lastName' | 'patientId' | 'dob' | 'sex';
+type Field = 'firstName' | 'lastName' | 'patientId' | 'dob' | 'sex' | 'consent';
 
 export const PatientIntakeScreen = () => {
   const navigation = useNavigation<any>();
@@ -29,6 +30,8 @@ export const PatientIntakeScreen = () => {
   const [patientId, setPatientId] = useState('');
   const [dob, setDob] = useState<DateParts>(EMPTY_DATE);
   const [sex, setSex] = useState<Sex | undefined>(undefined);
+  const [careConsent, setCareConsent] = useState(false);
+  const [aiConsent, setAiConsent] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   const firstNameRef = useRef<TextInputInstance>(null);
@@ -63,6 +66,7 @@ export const PatientIntakeScreen = () => {
             ? 'Date of birth must be in the past'
             : undefined,
     sex: sex ? undefined : "Select the patient's sex",
+    consent: careConsent ? undefined : "Record the patient's consent before registering them",
   };
   const errorFor = (field: Field) => (submitted || (field === 'patientId' && duplicate) ? problems[field] : undefined);
   const age = birth.date && !bornInFuture ? ageFrom(isoDay(birth.date), now) : null;
@@ -89,6 +93,7 @@ export const PatientIntakeScreen = () => {
       dob: isoDay(birth.date),
       sex,
       location: 'Clinic A', // Default location for MVP
+      consent: { care: true, aiTraining: aiConsent, noticeVersion: CONSENT_NOTICE_VERSION, recordedAt: new Date().toISOString() },
     });
     // Back to the list, where the new patient is at the top.
     navigation.goBack();
@@ -168,6 +173,28 @@ export const PatientIntakeScreen = () => {
           invalid={errorFor('sex') !== undefined}
         />
       </FormField>
+
+      <Text style={styles.group} accessibilityRole="header">
+        Consent
+      </Text>
+      <Text style={styles.notice}>
+        Read this to the patient or their carer and record their answers. They can withdraw consent at any time.
+      </Text>
+      <FormField label="Patient agrees to" error={errorFor('consent')}>
+        <CheckRow
+          label="Care records and wound photos"
+          description="Their details, wound assessments and wound photos are kept to plan and track their care. Required."
+          value={careConsent}
+          onChange={setCareConsent}
+          invalid={errorFor('consent') !== undefined}
+        />
+        <CheckRow
+          label="Improving wound measurement (optional)"
+          description="Wound photos, with name and other details removed, may be used to train the measurement AI."
+          value={aiConsent}
+          onChange={setAiConsent}
+        />
+      </FormField>
     </FormLayout>
   );
 };
@@ -186,5 +213,11 @@ const styles = StyleSheet.create({
   },
   tabular: {
     fontVariant: ['tabular-nums'],
+  },
+  notice: {
+    marginTop: 4,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textMuted,
   },
 });

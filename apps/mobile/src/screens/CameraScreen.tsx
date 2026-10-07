@@ -12,11 +12,14 @@ import { interactionStyle } from '../lib/interaction';
 import { useTreatmentContext } from '../lib/treatmentContext';
 import { mockAiAdapter } from '../lib/mockAiAdapter';
 import { spacing } from '../lib/theme';
+import { secureStorage } from '../store/secureStorage';
 import { useVisitStore } from '../store/useVisitStore';
 
 type ParamList = {
   Camera: { treatmentId: string; step: 'pre' | 'post' };
 };
+
+const CAPTURE_GUIDE_SEEN = 'capture-guide-seen';
 
 type Corner = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight';
 const CORNERS: Corner[] = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'];
@@ -46,6 +49,24 @@ export const CameraScreen = () => {
     }
   }, [step, treatment?.preImageUri, navigation, treatmentId]);
 
+  // The capture guide opens by itself the first time the camera is used (unless a carried-forward image is being
+  // reviewed first); after that it's behind the help button.
+  React.useEffect(() => {
+    if (step === 'pre' && treatment?.preImageUri) return;
+    let cancelled = false;
+    Promise.resolve(secureStorage.getItem(CAPTURE_GUIDE_SEEN))
+      .then(async (seen) => {
+        if (seen || cancelled) return;
+        await secureStorage.setItem(CAPTURE_GUIDE_SEEN, '1');
+        if (!cancelled) navigation.navigate('CaptureGuide');
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+    // Only on opening the camera.
+  }, []);
+
   React.useEffect(() => {
     // Simulate auto-calibration when camera opens
     if (permission?.granted && !calibrated && !calibrating) {
@@ -71,7 +92,13 @@ export const CameraScreen = () => {
   if (!permission.granted) {
     return (
       <SafeAreaView style={styles.screen} edges={['top', 'bottom', 'left', 'right']}>
-        <CaptureTopBar title={title} context={context} onClose={close} closeLabel="Close camera" />
+        <CaptureTopBar
+          title={title}
+          context={context}
+          onClose={close}
+          closeLabel="Close camera"
+          onHelp={() => navigation.navigate('CaptureGuide')}
+        />
         <View style={styles.permission}>
           <Text style={styles.permissionTitle}>Camera access needed</Text>
           <Text style={styles.permissionBody}>
@@ -132,7 +159,13 @@ export const CameraScreen = () => {
   return (
     <View style={styles.screen}>
       <SafeAreaView edges={['top', 'left', 'right']}>
-        <CaptureTopBar title={title} context={context} onClose={close} closeLabel="Close camera" />
+        <CaptureTopBar
+          title={title}
+          context={context}
+          onClose={close}
+          closeLabel="Close camera"
+          onHelp={() => navigation.navigate('CaptureGuide')}
+        />
       </SafeAreaView>
 
       <View style={styles.viewfinder}>

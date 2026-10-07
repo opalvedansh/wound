@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { SupabaseAuthGuard } from './auth/supabase-auth.guard';
 import { PrismaService } from './prisma.service';
 import { PatientController } from './patient.controller';
 import { CaseController } from './case.controller';
@@ -12,6 +14,7 @@ import { QuestionsService } from './questions/questions.service';
 @Module({
   imports: [AuthModule],
   controllers: [AppController, PatientController, CaseController, TreatmentController, QuestionsController],
-  providers: [AppService, PrismaService, QuestionsService],
+  // Every route needs a signed-in user unless it is marked @Public().
+  providers: [AppService, PrismaService, QuestionsService, { provide: APP_GUARD, useClass: SupabaseAuthGuard }],
 })
 export class AppModule {}
