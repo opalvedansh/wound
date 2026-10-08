@@ -16,7 +16,8 @@ export interface RateLimit {
 /** A tighter (or looser) limit for one route than the default. */
 export const Limit = (limit: RateLimit) => SetMetadata(LIMIT, limit);
 
-const DEFAULT: RateLimit = { max: 300, windowSeconds: 60, bucket: 'api' };
+// Per user per minute; RATE_LIMIT_PER_MINUTE raises it (load tests, or a clinic integration).
+const DEFAULT: RateLimit = { max: Number(process.env['RATE_LIMIT_PER_MINUTE'] ?? 300), windowSeconds: 60, bucket: 'api' };
 
 /**
  * Fixed-window rate limit in Redis, per signed-in user (or per IP for public routes), shared by every API

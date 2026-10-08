@@ -16,17 +16,24 @@ export interface AuditEntry {
 
 const BUFFER = 'audit:buffer';
 const FLUSH_EVERY_MS = 2000;
+const SWEEP_EVERY_TICKS = 30; // once a minute
 const BATCH = 500;
 
 /**
- * The audit trail (who did what, when). Writes are buffered in Redis and flushed in batches every 2 seconds
+ * The audit trail (who did what, when). Writes are buffered in Redis and flushed in batches within 2 seconds
  * (ADR-0005), so logging never adds a database round trip to a request. LPOP with a count is atomic, so every
  * API instance can flush safely. Without Redis, entries are written directly.
+ *
+ * An instance only asks Redis for entries after it logged some, plus a sweep once a minute for entries another
+ * instance left behind (e.g. it stopped before flushing): an idle API sends Redis almost nothing, which keeps
+ * a free-tier Redis within its monthly command allowance.
  */
 @Injectable()
 export class AuditService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AuditService.name);
   private timer?: NodeJS.Timeout;
+  private dirty = false;
+  private ticks = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -34,7 +41,13 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    this.timer = setInterval(() => void this.flush(), FLUSH_EVERY_MS);
+    this.timer = setInterval(() => {
+      this.ticks++;
+      if (this.dirty || this.ticks % SWEEP_EVERY_TICKS === 0) {
+        this.dirty = false;
+        void this.flush();
+      }
+    }, FLUSH_EVERY_MS);
     this.timer.unref();
   }
 
@@ -46,7 +59,8 @@ export class AuditService implements OnModuleInit, OnModuleDestroy {
   async log(entry: AuditEntry): Promise<void> {
     const row = { ...entry, at: new Date().toISOString() };
     const buffered = await this.redis.safe(async (r) => (await r.rpush(BUFFER, JSON.stringify(row))) > 0, false);
-    if (!buffered) await this.write([row]);
+    if (buffered) this.dirty = true;
+    else await this.write([row]);
   }
 
   /** Writes now (used before a CSV export streams: the rule is "no log entry, no file"). */

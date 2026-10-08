@@ -29,11 +29,24 @@ jobs:
   apps:
     name: API, web and shared code
     runs-on: ubuntu-latest
+    services:
+      # Throwaway database for the migration check.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ci" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      # prisma.config.ts reads it; generating the client never connects.
-      DIRECT_URL: postgresql://ci:ci@localhost:5432/ci
+      DIRECT_URL: postgresql://postgres:ci@localhost:5432/ci
       NX_DAEMON: "false"
       NX_NO_CLOUD: "true"
+      # The portal's build prerenders pages; the real values come from Vercel.
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+      NEXT_PUBLIC_API_URL: http://localhost:3333/api
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -57,3 +70,13 @@ jobs:
           (cd apps/web && npx next typegen)
           npx tsc --noEmit -p apps/web/tsconfig.json
           npx tsc --noEmit -p apps/mobile/tsconfig.app.json
+      - name: Migrations rebuild the schema exactly
+        run: |
+          # The roles Supabase has, which the lockdown migration revokes from.
+          PGPASSWORD=ci psql -h localhost -U postgres -d ci -qc "CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;"
+          npx prisma migrate deploy
+          npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+      - name: Production builds
+        run: |
+          npx nx build api
+          npx nx build web

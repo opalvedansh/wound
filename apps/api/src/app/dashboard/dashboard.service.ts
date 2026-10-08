@@ -192,6 +192,12 @@ export class DashboardService {
 
   /** One page of the queue. Drafts are AI results awaiting a clinician; the other views are wounds. */
   async queue(ctx: ClinicContext, view: QueueView, cursorRaw: unknown, limitRaw: unknown): Promise<Page<DraftItem | AttentionItem>> {
+    // The first page of each view is cached until the next write in the clinic.
+    if (!cursorRaw) return this.cache.clinic(ctx.clinicId, `queue:${view}:${limitFrom(limitRaw)}`, 30, () => this.queuePage(ctx, view, null, limitRaw));
+    return this.queuePage(ctx, view, cursorRaw, limitRaw);
+  }
+
+  private async queuePage(ctx: ClinicContext, view: QueueView, cursorRaw: unknown, limitRaw: unknown): Promise<Page<DraftItem | AttentionItem>> {
     const limit = limitFrom(limitRaw);
     const offset = Number(decodeCursor(cursorRaw)?.v ?? 0) || 0;
     const next = (count: number) => (count > limit ? encodeCursor({ v: offset + limit, id: 'offset' }) : null);

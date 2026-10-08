@@ -82,6 +82,10 @@ export class JobsService implements OnModuleDestroy {
       {
         connection,
         concurrency,
+        // While the queue is empty the worker waits on Redis this long per call (a new job wakes it at once).
+        // Longer waits mean far fewer Redis commands when idle, which matters on a metered Redis.
+        drainDelay: Number(process.env['QUEUE_IDLE_SECONDS'] ?? 30),
+        stalledInterval: 120_000,
       },
     );
     this.worker.on('failed', (job, error) => this.logger.warn(`Job ${job?.name} ${job?.id} failed: ${error.message}`));

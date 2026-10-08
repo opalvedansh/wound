@@ -94,6 +94,15 @@ export class PatientsService {
 
   async list(ctx: ClinicContext, raw: unknown): Promise<Page<PatientListItem>> {
     const query = parse(listQuery, raw);
+    // First pages are what everyone opens: cached until the next write in the clinic.
+    if (!query.cursor) {
+      const key = `patients:${query.sort}:${query.status ?? ''}:${limitFrom(query.limit)}:${(query.q ?? '').toLowerCase()}`;
+      return this.cache.clinic(ctx.clinicId, key, 30, () => this.listPage(ctx, query));
+    }
+    return this.listPage(ctx, query);
+  }
+
+  private async listPage(ctx: ClinicContext, query: z.infer<typeof listQuery>): Promise<Page<PatientListItem>> {
     const limit = limitFrom(query.limit);
     const where: Prisma.PatientWhereInput = {
       clinicId: ctx.clinicId,

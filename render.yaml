@@ -1,6 +1,9 @@
 # Render blueprint for the NestJS API (apps/api). The web portal goes on Vercel (vercel.json) and the model on a
 # Hugging Face Space (wound-ai/Dockerfile); see docs/deploy.md. Secrets are entered in the Render dashboard
 # (`sync: false`), never committed.
+#
+# Region: Singapore is Render's closest region to the database (Supabase, Seoul). Keep the API, the database and
+# Redis close together: almost every request is one database round trip, so their distance is its latency.
 services:
   - type: web
     name: wound-api
@@ -10,17 +13,28 @@ services:
     # Applies pending database migrations on every deploy, before the new API starts.
     buildCommand: npm ci && npx prisma generate && npx prisma migrate deploy && npx nx build api
     startCommand: node dist/apps/api/main.js
-    healthCheckPath: /api
+    # Ready = database reachable (Redis and the model are reported but don't fail it).
+    healthCheckPath: /api/health/ready
     envVars:
       - key: NODE_VERSION
         value: "24"
+      - key: NODE_ENV
+        value: production
       - key: NX_DAEMON
         value: "false"
       - key: NX_NO_CLOUD
         value: "true"
-      - key: DATABASE_URL # Supabase session pooler (port 5432)
+      # On the free plan this one service also runs the background jobs (visit analysis, thumbnails).
+      # With the paid worker below, set RUN_WORKERS=0 here.
+      - key: RUN_WORKERS
+        value: "1"
+      - key: DB_POOL_MAX
+        value: "10"
+      - key: DATABASE_URL # Supabase transaction pooler (port 6543)
         sync: false
-      - key: DIRECT_URL # same as DATABASE_URL; used by migrations
+      - key: DIRECT_URL # Supabase session pooler (port 5432); used by migrations
+        sync: false
+      - key: REDIS_URL # Upstash: rediss://default:<password>@<host>:6379
         sync: false
       - key: SUPABASE_URL
         sync: false
@@ -28,9 +42,31 @@ services:
         sync: false
       - key: SUPABASE_JWKS_URL # <SUPABASE_URL>/auth/v1/.well-known/jwks.json
         sync: false
+      - key: SHARE_LINK_SECRET # long random string; changing it invalidates every share link
+        sync: false
+      - key: PUBLIC_API_URL # https://<service>.onrender.com/api (share links point here)
+        sync: false
+      - key: PORTAL_URL # the Vercel URL (invite emails link to its sign-in page)
+        sync: false
       - key: WOUND_API_URL # the Hugging Face Space URL
         sync: false
       - key: WOUND_API_KEY # same value as the Space's WOUND_API_KEY secret
         sync: false
-      - key: CORS_ORIGINS # the Vercel URL of the web portal
+      - key: CORS_ORIGINS # the Vercel URL of the web portal (comma-separated if several)
         sync: false
+
+  # When traffic grows (paid plans): a separate worker so model calls never compete with requests.
+  # Same code, and the same env values as the web service (enter them again), plus WORKER_ONLY=1; then set
+  # RUN_WORKERS=0 on the web service and raise its instance count.
+  #
+  # - type: worker
+  #   name: wound-worker
+  #   runtime: node
+  #   plan: starter
+  #   region: singapore
+  #   buildCommand: npm ci && npx prisma generate && npx nx build api
+  #   startCommand: node dist/apps/api/main.js
+  #   envVars:
+  #     - key: WORKER_ONLY
+  #       value: "1"
+  #     # …plus every secret listed for wound-api above
