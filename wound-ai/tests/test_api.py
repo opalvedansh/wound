@@ -114,3 +114,14 @@ def test_outline_is_scaled_to_the_photo():
 def test_no_outline_without_a_wound():
     assert mask_outline(None) is None
     assert mask_outline(np.zeros((10, 10), np.uint8)) is None
+
+
+def test_black_letterbox_borders_are_not_glare():
+    from wound_ai.quality import check_quality
+    rng = np.random.default_rng(1)
+    photo = rng.integers(40, 210, (600, 800, 3), dtype=np.uint8)
+    padded = np.zeros((900, 900, 3), np.uint8)
+    padded[150:750, 50:850] = photo  # a quarter of the frame is black padding
+    q = check_quality(padded)
+    assert q.ok, q.issues
+    assert q.metrics["clipped_frac"] < 0.01

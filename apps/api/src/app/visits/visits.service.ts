@@ -3,31 +3,37 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleInit,
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import sharp from 'sharp';
+import { z } from 'zod';
 import {
   filterIntake,
   missingIntake,
-  previousMeasurement,
-  type CaseView,
+  type AnalyzeResponse,
   type IntakeAnswers,
   type IntakeQuestion,
-  type Overview,
-  type QueueItem,
-  type ReviewView,
-  type VisitOutcome,
 } from '@antigravity-project-spec-pack/domain/wound-model';
-import type { AuthUser } from '../auth/supabase-auth.guard';
-import type { ReviewInput } from '../inputs';
+import type { ReviewView, VisitView } from '@antigravity-project-spec-pack/domain/api';
+import type { ClinicContext } from '../auth/clinic.guard';
+import { SummaryService } from '../cases/summary.service';
+import { AuditService } from '../platform/audit.service';
+import { CacheService } from '../platform/cache.service';
+import { JobsService, type JobMeta } from '../platform/jobs.service';
+import { parse } from '../platform/validation';
 import { PrismaService } from '../prisma.service';
 import { UsersService } from '../users.service';
-import { toCaseSummary, toReviewView, toVisitView } from '../views';
+import { toReviewView, toVisitView, visitPaths, visitSelect } from '../views';
 import { ModelClient } from './model-client';
 import { StorageService } from './storage.service';
 
 export const MAX_PHOTO_BYTES = 15 * 1024 * 1024; // the model service's own limit
+const THUMB_WIDTH = 320;
+const DAY_MS = 86_400_000;
 
 /** The parts of a multer upload the service reads. */
 export interface PhotoUpload {
@@ -57,19 +63,42 @@ const parseAnswers = (raw: unknown): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 
+export const reviewInput = z
+  .object({
+    decision: z.enum(['approved', 'edited', 'rejected']),
+    finalReport: z.string().trim().max(20000).optional(),
+    reason: z.string().trim().max(2000).optional(),
+    corrections: z.record(z.string(), z.unknown()).optional(),
+  })
+  .refine((r) => r.decision !== 'edited' || !!r.finalReport, { path: ['finalReport'], message: 'required' })
+  .refine((r) => r.decision !== 'rejected' || !!r.reason, { path: ['reason'], message: 'required' });
+
 /**
- * A visit is one analysed photo of a wound: a Treatment with its pre-treatment Phase, the photo (Image) and the
- * model's findings (AIResult), the same shape the mobile app uses. A clinician then approves, edits or rejects
- * the draft (AIReview). Every query is scoped to the signed-in user's own patients; anything else is a 404.
+ * A visit is one analysed photo of a wound: a Treatment (T1, T2…) with its pre-treatment Phase, the photo (Image)
+ * and the model's findings (AIResult). Analysis runs in the background: creating a visit returns at once with
+ * status `processing`, and clients poll GET /visits/:id. A clinician then approves, edits or rejects the draft.
  */
 @Injectable()
-export class VisitsService {
+export class VisitsService implements OnModuleInit {
+  private readonly logger = new Logger(VisitsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly model: ModelClient,
     private readonly storage: StorageService,
     private readonly users: UsersService,
+    private readonly jobs: JobsService,
+    private readonly summary: SummaryService,
+    private readonly cache: CacheService,
+    private readonly audit: AuditService,
   ) {}
+
+  onModuleInit() {
+    this.jobs.handle('analyze-visit', (data, meta) => this.analyze(String(data['visitId']), meta));
+    this.jobs.handle('thumbnail', (data) => this.thumbnail(String(data['visitId'])));
+    this.jobs.handle('forward-review', (data) => this.forwardReview(String(data['visitId'])));
+    this.jobs.handle('purge', () => this.purge());
+  }
 
   intakeQuestions(): Promise<IntakeQuestion[]> {
     return this.model.questions();
@@ -80,43 +109,23 @@ export class VisitsService {
     return this.model.followUps(filterIntake(answers, await this.model.questions()));
   }
 
-  async caseView(user: AuthUser, caseId: string): Promise<CaseView> {
-    const found = await this.prisma.case.findFirst({
-      where: { id: caseId, patient: { userId: user.id } },
-      include: {
-        patient: true,
-        treatments: {
-          orderBy: { createdAt: 'asc' },
-          include: { phases: { include: { image: true, aiResult: { include: { review: true } } } } },
-        },
-      },
-    });
-    if (!found) throw new NotFoundException('Case not found.');
-
-    const analysed = found.treatments.flatMap((t) =>
-      t.phases.filter((p) => p.aiResult).map((p) => ({ treatmentId: t.id, path: p.image?.imageUrl ?? null, result: p.aiResult! })),
-    );
-    const urls = await this.storage.signedUrls(analysed.flatMap((v) => (v.path ? [v.path] : [])));
-    return {
-      ...toCaseSummary(found),
-      comorbidities: found.comorbidities,
-      patient: {
-        id: found.patient.id,
-        firstName: found.patient.firstName,
-        lastName: found.patient.lastName,
-        patientId: found.patient.patientId,
-      },
-      visits: analysed.map((v) => toVisitView(v.treatmentId, v.result, v.path ? urls.get(v.path) ?? null : null)),
-    };
+  private async view(ctx: ClinicContext, id: string): Promise<VisitView> {
+    const row = await this.prisma.aIResult.findFirst({ where: { id, clinicId: ctx.clinicId }, select: visitSelect });
+    if (!row) throw new NotFoundException('Visit not found.');
+    const urls = await this.storage.signedUrls(visitPaths([row]));
+    return toVisitView(row, urls);
   }
 
-  async create(user: AuthUser, caseId: string, photo: PhotoUpload | undefined, rawAnswers: unknown): Promise<VisitOutcome> {
-    const woundCase = await this.prisma.case.findFirst({
-      where: { id: caseId, patient: { userId: user.id } },
-      include: { treatments: { include: { phases: { include: { aiResult: true } } } } },
-    });
-    if (!woundCase) throw new NotFoundException('Case not found.');
+  get(ctx: ClinicContext, id: string): Promise<VisitView> {
+    return this.view(ctx, id);
+  }
 
+  async create(ctx: ClinicContext, caseId: string, photo: PhotoUpload | undefined, rawAnswers: unknown): Promise<VisitView> {
+    const woundCase = await this.prisma.case.findFirst({
+      where: { id: caseId, clinicId: ctx.clinicId, deletedAt: null },
+      select: { id: true, patientId: true },
+    });
+    if (!woundCase) throw new NotFoundException('Wound not found.');
     if (!photo) throw new BadRequestException('Add a photo of the wound.');
     if (photo.size > MAX_PHOTO_BYTES) throw new PayloadTooLargeException('The photo is larger than 15 MB.');
     const type = imageType(photo.buffer);
@@ -125,184 +134,222 @@ export class VisitsService {
     const answers = parseAnswers(rawAnswers);
     const missing = missingIntake(answers as IntakeAnswers);
     if (missing.length) throw new BadRequestException({ message: 'Answer the required questions.', problems: missing });
-
-    // Only the model's own choice and number questions (core + the follow-ups these answers unlock) are sent.
+    // Only the model's own choice and number questions (core + the follow-ups these answers unlock) are kept:
+    // free text could carry identifying details.
     const core = await this.model.questions();
     const followUps = await this.model.followUps(filterIntake(answers, core));
     const intake = filterIntake(answers, [...core, ...followUps]);
 
-    const earlier = woundCase.treatments.flatMap((t) => t.phases.flatMap((p) => (p.aiResult ? [p.aiResult] : [])));
-    const findings = await this.model.analyze({ buffer: photo.buffer, mimetype: type }, intake, previousMeasurement(earlier));
-
-    // A photo the model can't use is never stored: the clinician retakes it.
-    if (findings.status !== 'ok') {
-      return { status: findings.status, issues: findings.quality?.issues ?? [], flags: findings.flags ?? [] };
-    }
-
     const treatmentId = randomUUID();
-    const phaseId = `${treatmentId}-PRE`;
-    const path = `treatments/${treatmentId}/pre.${type === 'image/png' ? 'png' : 'jpg'}`;
-    const m = findings.measurement ?? null;
-
+    const phaseId = randomUUID();
+    const path = `${ctx.clinicId}/treatments/${treatmentId}/pre.${type === 'image/png' ? 'png' : 'jpg'}`;
     await this.storage.upload(path, photo.buffer, type);
+    let visitId: string;
     try {
-      const result = await this.prisma.$transaction(async (tx) => {
-        await tx.treatment.create({ data: { id: treatmentId, caseId, therapy: [] } });
-        await tx.phase.create({ data: { id: phaseId, treatmentId, phaseType: 'PRE' } });
+      visitId = await this.prisma.$transaction(async (tx) => {
+        const last = await tx.treatment.findFirst({ where: { caseId }, orderBy: { sequence: 'desc' }, select: { sequence: true } });
+        await tx.treatment.create({ data: { id: treatmentId, clinicId: ctx.clinicId, caseId, sequence: (last?.sequence ?? 0) + 1, therapy: [] } });
+        await tx.phase.create({ data: { id: phaseId, clinicId: ctx.clinicId, treatmentId, phaseType: 'PRE' } });
         await tx.image.create({ data: { phaseId, imageUrl: path } });
-        return tx.aIResult.create({
-          data: {
-            phaseId,
-            area: m?.area_cm2 ?? null,
-            length: m?.length_cm ?? null,
-            height: m?.width_cm ?? null,
-            confidenceScore: findings.wound_type?.prob ?? null,
-            findings: findings as unknown as Prisma.InputJsonValue,
-            intake: intake as Prisma.InputJsonValue,
-            draftReport: findings.report_markdown ?? null,
-            modelVersions: (findings.model_versions ?? undefined) as Prisma.InputJsonValue | undefined,
-            modelCaseId: findings.case_id ?? null,
-          },
+        const result = await tx.aIResult.create({
+          data: { clinicId: ctx.clinicId, phaseId, status: 'processing', intake: intake as Prisma.InputJsonValue },
+          select: { id: true },
         });
+        return result.id;
       });
-      const urls = await this.storage.signedUrls([path]);
-      return { status: 'ok', visit: toVisitView(treatmentId, { ...result, review: null }, urls.get(path) ?? null) };
     } catch (error) {
       await this.storage.remove(path);
       throw error;
     }
+    await this.jobs.enqueue('analyze-visit', { visitId }, { jobId: `analyze-${visitId}` });
+    await this.audit.log({ clinicId: ctx.clinicId, userId: ctx.userId, action: 'visit.create', entity: 'AIResult', entityId: visitId });
+    return this.view(ctx, visitId);
   }
 
-  async overview(user: AuthUser, now = new Date()): Promise<Overview> {
-    const mine = { patient: { userId: user.id } };
-    const [patients, openWounds, results] = await Promise.all([
-      this.prisma.patient.count({ where: { userId: user.id } }),
-      this.prisma.case.count({ where: mine }),
-      this.prisma.aIResult.findMany({
-        where: { phase: { treatment: { case: mine } } },
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          createdAt: true,
-          area: true,
-          findings: true,
-          review: { select: { id: true } },
-          phase: { select: { treatment: { select: { case: { select: { id: true, location: true, patient: true } } } } } },
-        },
-      }),
-    ]);
-    const weekAgo = now.getTime() - 7 * 86_400_000;
-    const queue: QueueItem[] = results
-      .filter((r) => !r.review)
-      .map((r) => {
-        const flags = ((r.findings as { flags?: { level: string }[] } | null)?.flags ?? []);
-        const c = r.phase.treatment.case;
-        return {
-          aiResultId: r.id,
-          caseId: c.id,
-          caseLocation: c.location,
-          patient: { id: c.patient.id, firstName: c.patient.firstName, lastName: c.patient.lastName, patientId: c.patient.patientId },
-          takenAt: r.createdAt.toISOString(),
-          urgentFlags: flags.filter((f) => f.level === 'urgent').length,
-          reviewFlags: flags.filter((f) => f.level === 'review').length,
-          areaCm2: r.area,
-        };
-      })
-      // Urgent first, then newest (the list is already newest first and sort is stable).
-      .sort((a, b) => Number(b.urgentFlags > 0) - Number(a.urgentFlags > 0));
-    return {
-      patients,
-      openWounds,
-      visitsThisWeek: results.filter((r) => r.createdAt.getTime() >= weekAgo).length,
-      awaitingReview: queue.length,
-      urgentAwaitingReview: queue.filter((q) => q.urgentFlags > 0).length,
-      queue,
-    };
+  /** Runs a failed analysis again (e.g. the model was asleep or down). */
+  async retry(ctx: ClinicContext, id: string): Promise<VisitView> {
+    const row = await this.prisma.aIResult.findFirst({ where: { id, clinicId: ctx.clinicId }, select: { status: true } });
+    if (!row) throw new NotFoundException('Visit not found.');
+    if (row.status !== 'failed') throw new ConflictException('Only a failed analysis can be retried.');
+    await this.prisma.aIResult.update({ where: { id }, data: { status: 'processing', error: null } });
+    await this.jobs.enqueue('analyze-visit', { visitId: id }, { jobId: `analyze-${id}-${Date.now()}` });
+    return this.view(ctx, id);
   }
 
-  /** Deletes a visit (its treatment, phases, results, review) and then its photos. */
-  async removeVisit(user: AuthUser, aiResultId: string): Promise<void> {
-    const result = await this.prisma.aIResult.findFirst({
-      where: { id: aiResultId, phase: { treatment: { case: { patient: { userId: user.id } } } } },
-      include: { phase: { include: { treatment: { include: { phases: { include: { image: true } } } } } } },
+  /** Background job: the model analyses the stored photo. */
+  async analyze(visitId: string, meta: JobMeta = { final: true }): Promise<void> {
+    const row = await this.prisma.aIResult.findUnique({
+      where: { id: visitId },
+      select: {
+        id: true,
+        status: true,
+        intake: true,
+        phase: { select: { id: true, image: { select: { imageUrl: true } }, treatment: { select: { caseId: true, case: { select: { latestAreaCm2: true, lastVisitAt: true } } } } } },
+      },
     });
-    if (!result) throw new NotFoundException('Result not found.');
-    const treatmentId = result.phase.treatmentId;
-    const paths = result.phase.treatment.phases.flatMap((p) => (p.image ? [p.image.imageUrl] : []));
-    const inTreatment = { phase: { treatmentId } };
-    await this.prisma.$transaction([
-      this.prisma.aIReview.deleteMany({ where: { aiResult: inTreatment } }),
-      this.prisma.aIResult.deleteMany({ where: inTreatment }),
-      this.prisma.image.deleteMany({ where: inTreatment }),
-      this.prisma.clinicalAssessment.deleteMany({ where: inTreatment }),
-      this.prisma.phase.deleteMany({ where: { treatmentId } }),
-      this.prisma.treatment.delete({ where: { id: treatmentId } }),
-    ]);
-    await this.storage.remove(paths);
-  }
+    if (!row || row.status !== 'processing' || !row.phase.image) return;
+    const path = row.phase.image.imageUrl;
+    const { case: c, caseId } = row.phase.treatment;
+    // The case summary still describes the visits before this one: exactly what "previous" means.
+    const previous =
+      c.latestAreaCm2 && c.lastVisitAt
+        ? { area_cm2: c.latestAreaCm2, days_ago: Math.max(0, Math.round((Date.now() - c.lastVisitAt.getTime()) / DAY_MS)) }
+        : undefined;
 
-  /** Deletes a patient with every wound, visit and photo. */
-  async removePatient(user: AuthUser, patientId: string): Promise<void> {
-    const patient = await this.prisma.patient.findFirst({
-      where: { id: patientId, userId: user.id },
-      include: { cases: { include: { treatments: { include: { phases: { include: { image: true } } } } } } },
+    let findings: AnalyzeResponse;
+    try {
+      const photo = await this.storage.download(path);
+      findings = await this.model.analyze({ buffer: photo, mimetype: path.endsWith('.png') ? 'image/png' : 'image/jpeg' }, row.intake as IntakeAnswers, previous);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Let the queue retry; after the last attempt the visit shows as failed with a Retry button.
+      await this.prisma.aIResult.update({
+        where: { id: visitId },
+        data: { error: message.slice(0, 300), ...(meta.final ? { status: 'failed' } : {}) },
+      });
+      if (meta.final) return;
+      throw error;
+    }
+
+    if (findings.status !== 'ok') {
+      // A photo the model can't use is never kept: the clinician retakes it.
+      await this.prisma.$transaction([
+        this.prisma.aIResult.update({ where: { id: visitId }, data: { status: findings.status, findings: findings as unknown as Prisma.InputJsonValue } }),
+        this.prisma.image.deleteMany({ where: { phaseId: row.phase.id } }),
+      ]);
+      await this.storage.remove(path);
+      return;
+    }
+
+    const m = findings.measurement ?? null;
+    const flags = findings.flags ?? [];
+    await this.prisma.aIResult.update({
+      where: { id: visitId },
+      data: {
+        status: 'ok',
+        error: null,
+        area: m?.area_cm2 ?? null,
+        length: m?.length_cm ?? null,
+        height: m?.width_cm ?? null,
+        confidenceScore: findings.wound_type?.prob ?? null,
+        findings: findings as unknown as Prisma.InputJsonValue,
+        draftReport: findings.report_markdown ?? null,
+        modelVersions: (findings.model_versions ?? undefined) as Prisma.InputJsonValue | undefined,
+        modelCaseId: findings.case_id ?? null,
+        urgent: flags.some((f) => f.level === 'urgent'),
+        flagCount: flags.length,
+      },
     });
-    if (!patient) throw new NotFoundException('Patient not found.');
-    const paths = patient.cases.flatMap((c) => c.treatments.flatMap((t) => t.phases.flatMap((p) => (p.image ? [p.image.imageUrl] : []))));
-    const inPatient = { phase: { treatment: { case: { patientId } } } };
-    await this.prisma.$transaction([
-      this.prisma.aIReview.deleteMany({ where: { aiResult: inPatient } }),
-      this.prisma.aIResult.deleteMany({ where: inPatient }),
-      this.prisma.image.deleteMany({ where: inPatient }),
-      this.prisma.clinicalAssessment.deleteMany({ where: inPatient }),
-      this.prisma.phase.deleteMany({ where: { treatment: { case: { patientId } } } }),
-      this.prisma.treatment.deleteMany({ where: { case: { patientId } } }),
-      this.prisma.case.deleteMany({ where: { patientId } }),
-      this.prisma.patient.delete({ where: { id: patientId } }),
-    ]);
-    await this.storage.remove(paths);
+    await this.summary.refreshCase(caseId);
+    await this.jobs.enqueue('thumbnail', { visitId });
   }
 
-  async review(user: AuthUser, aiResultId: string, input: ReviewInput): Promise<ReviewView> {
+  /** Background job: a 320 px thumbnail for lists and cards (a fraction of the photo's size). */
+  async thumbnail(visitId: string): Promise<void> {
+    const row = await this.prisma.aIResult.findUnique({
+      where: { id: visitId },
+      select: { clinicId: true, phase: { select: { id: true, image: { select: { imageUrl: true, thumbPath: true } } } } },
+    });
+    const image = row?.phase.image;
+    if (!row || !image || image.thumbPath) return;
+    const photo = await this.storage.download(image.imageUrl);
+    const thumb = await sharp(photo).rotate().resize({ width: THUMB_WIDTH, withoutEnlargement: true }).jpeg({ quality: 78 }).toBuffer();
+    const thumbPath = image.imageUrl.replace(/\.(jpg|png)$/, '.thumb.jpg');
+    await this.storage.upload(thumbPath, thumb, 'image/jpeg');
+    await this.prisma.image.update({ where: { phaseId: row.phase.id }, data: { thumbPath } });
+    await this.cache.bump(row.clinicId);
+  }
+
+  async review(ctx: ClinicContext, id: string, raw: unknown): Promise<ReviewView> {
+    const input = parse(reviewInput, raw, 'Check the review.');
     const result = await this.prisma.aIResult.findFirst({
-      where: { id: aiResultId, phase: { treatment: { case: { patient: { userId: user.id } } } } },
-      include: { review: true },
+      where: { id, clinicId: ctx.clinicId, status: 'ok' },
+      select: { id: true, draftReport: true, review: { select: { id: true } } },
     });
     if (!result) throw new NotFoundException('Result not found.');
     if (result.review) throw new ConflictException('This draft has already been reviewed.');
 
-    await this.users.ensure(user);
-    // Approving keeps the draft as the final text; editing stores the clinician's version.
-    const finalReport = input.decision === 'approved' ? result.draftReport : input.decision === 'edited' ? input.finalReport : null;
+    await this.users.ensure({ id: ctx.userId, email: ctx.email, role: null });
+    const finalReport = input.decision === 'approved' ? result.draftReport : input.decision === 'edited' ? input.finalReport ?? null : null;
     let review;
     try {
-      review = await this.prisma.aIReview.create({
-        data: {
-          aiResultId,
-          reviewerId: user.id,
-          decision: input.decision,
-          finalReport,
-          reason: input.decision === 'rejected' ? input.reason : null,
-          corrections: (input.corrections ?? undefined) as Prisma.InputJsonValue | undefined,
-        },
-      });
+      [review] = await this.prisma.$transaction([
+        this.prisma.aIReview.create({
+          data: {
+            aiResultId: id,
+            reviewerId: ctx.userId,
+            decision: input.decision,
+            finalReport,
+            reason: input.decision === 'rejected' ? input.reason ?? null : null,
+            corrections: (input.corrections ?? undefined) as Prisma.InputJsonValue | undefined,
+          },
+        }),
+        this.prisma.aIResult.update({ where: { id }, data: { reviewStatus: input.decision } }),
+      ]);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('This draft has already been reviewed.');
       }
       throw error;
     }
-
-    if (result.modelCaseId) {
-      // The model service only sees an opaque user id, never a name or email.
-      await this.model.review({
-        case_id: result.modelCaseId,
-        reviewer_id: user.id,
-        decision: input.decision,
-        final_summary: finalReport,
-        corrections: input.corrections,
-      });
-    }
+    // The model service hears about the decision in the background, never slowing the clinician down.
+    await Promise.all([
+      this.jobs.enqueue('forward-review', { visitId: id }),
+      this.cache.bump(ctx.clinicId),
+      this.audit.log({ clinicId: ctx.clinicId, userId: ctx.userId, action: 'visit.review', entity: 'AIResult', entityId: id, details: { decision: input.decision } }),
+    ]);
     return toReviewView(review);
+  }
+
+  async forwardReview(visitId: string): Promise<void> {
+    const r = await this.prisma.aIResult.findUnique({ where: { id: visitId }, select: { modelCaseId: true, review: true } });
+    if (!r?.modelCaseId || !r.review) return;
+    await this.model.review({
+      case_id: r.modelCaseId,
+      reviewer_id: r.review.reviewerId, // an opaque id, never a name or email
+      decision: r.review.decision as 'approved' | 'edited' | 'rejected',
+      final_summary: r.review.finalReport,
+      corrections: (r.review.corrections as Record<string, unknown> | null) ?? null,
+    });
+  }
+
+  /** Deletes a visit: its result and photos at once; the treatment stays as a tombstone for the mobile app's sync. */
+  async remove(ctx: ClinicContext, id: string): Promise<void> {
+    const result = await this.prisma.aIResult.findFirst({
+      where: { id, clinicId: ctx.clinicId },
+      select: { phase: { select: { treatmentId: true, treatment: { select: { caseId: true } } } } },
+    });
+    if (!result) throw new NotFoundException('Visit not found.');
+    const { treatmentId } = result.phase;
+    const images = await this.prisma.image.findMany({ where: { phase: { treatmentId } }, select: { imageUrl: true, thumbPath: true } });
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.aIResult.deleteMany({ where: { phase: { treatmentId } } }),
+      this.prisma.image.deleteMany({ where: { phase: { treatmentId } } }),
+      this.prisma.clinicalAssessment.deleteMany({ where: { phase: { treatmentId } } }),
+      this.prisma.phase.updateMany({ where: { treatmentId }, data: { deletedAt: now, version: { increment: 1 } } }),
+      this.prisma.treatment.update({ where: { id: treatmentId }, data: { deletedAt: now, version: { increment: 1 } } }),
+    ]);
+    await this.storage.remove(images.flatMap((i) => [i.imageUrl, i.thumbPath ?? '']));
+    await this.summary.refreshCase(result.phase.treatment.caseId);
+    await this.audit.log({ clinicId: ctx.clinicId, userId: ctx.userId, action: 'visit.delete', entity: 'AIResult', entityId: id, details: { photos: images.length } });
+  }
+
+  /** Daily job: retakes and abandoned visits after a day, tombstones after 30 days. */
+  async purge(): Promise<void> {
+    const dayAgo = new Date(Date.now() - DAY_MS);
+    const monthAgo = new Date(Date.now() - 30 * DAY_MS);
+    const stale = await this.prisma.aIResult.findMany({
+      where: { status: { in: ['retake', 'no_wound_found'] }, createdAt: { lt: dayAgo } },
+      select: { phase: { select: { treatmentId: true } } },
+    });
+    const treatmentIds = stale.map((s) => s.phase.treatmentId);
+    if (treatmentIds.length) await this.prisma.treatment.deleteMany({ where: { id: { in: treatmentIds } } }); // cascades
+    await this.prisma.$transaction([
+      this.prisma.patient.deleteMany({ where: { deletedAt: { lt: monthAgo } } }),
+      this.prisma.case.deleteMany({ where: { deletedAt: { lt: monthAgo } } }),
+      this.prisma.treatment.deleteMany({ where: { deletedAt: { lt: monthAgo } } }),
+    ]);
+    this.logger.log(`Purged ${treatmentIds.length} retake visit(s) and old tombstones.`);
   }
 }

@@ -1,92 +1,192 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// The database behind the NestJS API. All access goes through the API (browsers and the app never read tables
+// directly); every query is scoped to the caller's clinic. Design notes:
+// - clinicId is copied onto every clinic-owned table, so each scoped query hits one index without joins.
+// - Case and Patient keep summaries (status, last/next visit, areas) updated on every write, so lists, the
+//   review queue and the dashboard never scan visits.
+// - Synced tables (Patient, Case, Treatment, Phase) carry updatedAt/deletedAt/version for the mobile app's
+//   offline sync; deletedAt rows are tombstones, purged later (photos are removed at once).
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
+  provider   = "postgresql"
+  extensions = [pg_trgm]
+}
+
+enum Role {
+  ADMIN // everything in the clinic, plus members, exports and the audit log
+  DOCTOR // patients, wounds, visits and reviews
+  FRONT_DESK // registers patients; no clinical data
+}
+
+model Clinic {
+  id         String       @id @default(uuid())
+  name       String
+  patientSeq Int          @default(0) // last number used for patient codes (WM-0001…), taken atomically
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  members    Membership[]
+  patients   Patient[]
+  cases      Case[]
+  treatments Treatment[]
+  phases     Phase[]
+  aiResults  AIResult[]
+  auditLogs  AuditLog[]
+  shareLinks ShareLink[]
 }
 
 model User {
-  id        String     @id // Matches auth.users.id; the API creates the row on a user's first write
-  email     String     @unique
-  firstName String     @default("")
-  lastName  String     @default("")
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  patients  Patient[]
-  reviews   AIReview[]
+  id          String       @id // Matches auth.users.id
+  email       String       @unique
+  firstName   String       @default("")
+  lastName    String       @default("")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  patients    Patient[]
+  reviews     AIReview[]
+}
+
+model Membership {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinicId  String
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  role      Role     @default(DOCTOR)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, clinicId])
+  @@index([clinicId, role])
 }
 
 model Patient {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id])
-  firstName   String
-  lastName    String
-  patientId   String   @unique
-  sex         String
-  dateOfBirth DateTime
-  location    String?
-  consent     Json? // DPDP consent at registration: { care, aiTraining, noticeVersion, recordedAt }
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  cases       Case[]
+  id           String    @id @default(uuid())
+  clinicId     String
+  clinic       Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  createdById  String?
+  createdBy    User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  patientId    String // the clinic's code or MRN, unique within the clinic (generated WM-0001… if not given)
+  firstName    String
+  lastName     String
+  sex          String
+  dateOfBirth  DateTime?
+  ageYears     Int? // when only the age is known
+  mobile       String?
+  location     String? // town / area or ward
+  referral     String?
+  notes        String?
+  consent      Json? // DPDP: { care, photos, location, aiTraining, noticeVersion, recordedAt }
+  searchText   String    @default("") // lower-case name + code, trigram-indexed for fast search
+  // Summary of the patient's open wounds, kept up to date on every visit and review.
+  status       String? // worst open-wound status: overdue > review > healing; null before any visit
+  lastVisitAt  DateTime?
+  nextVisitDue DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+  version      Int       @default(1)
+  cases        Case[]
+
+  @@unique([clinicId, patientId])
+  @@index([clinicId, createdAt(sort: Desc)])
+  @@index([clinicId, status, nextVisitDue])
+  @@index([clinicId, lastVisitAt])
+  @@index([clinicId, updatedAt])
+  @@index([searchText(ops: raw("gin_trgm_ops"))], type: Gin)
 }
 
 model Case {
-  id            String      @id @default(uuid())
-  patientId     String
-  patient       Patient     @relation(fields: [patientId], references: [id])
-  onset         DateTime
-  location      String
-  woundType     String
-  comorbidities String[]
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  treatments    Treatment[]
+  id             String      @id @default(uuid())
+  clinicId       String
+  clinic         Clinic      @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  patientId      String
+  patient        Patient     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  onset          DateTime
+  location       String
+  woundType      String
+  comorbidities  String[]
+  remarks        String?
+  closedAt       DateTime?
+  // Summary, kept up to date on every visit and review.
+  status         String? // healing | review | overdue; null before the first visit
+  statusReason   String?
+  visitCount     Int         @default(0)
+  lastVisitAt    DateTime?
+  nextVisitDue   DateTime?
+  firstAreaCm2   Float?
+  latestAreaCm2  Float?
+  latestResultId String?
+  reviewedAt     DateTime? // reviewed in the portal; a newer visit puts the case back in the queue
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  deletedAt      DateTime?
+  version        Int         @default(1)
+  treatments     Treatment[]
+  shareLinks     ShareLink[]
+
+  @@index([patientId])
+  @@index([clinicId, status, nextVisitDue])
+  @@index([clinicId, createdAt(sort: Desc)])
+  @@index([clinicId, updatedAt])
 }
 
 model Treatment {
   id            String    @id @default(uuid())
+  clinicId      String
+  clinic        Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   caseId        String
-  case          Case      @relation(fields: [caseId], references: [id])
+  case          Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sequence      Int       @default(1) // T1, T2… within the case
   therapy       String[]
   dressing      String?
   nextVisit     DateTime?
-  careResponses Json? // answers to admin-added care questions: { questionId, title, type, answer }[]
+  careResponses Json? // answers to admin-added care questions
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+  version       Int       @default(1)
   phases        Phase[]
+
+  @@index([caseId, createdAt])
+  @@index([clinicId, updatedAt])
 }
 
 model Phase {
   id          String              @id @default(uuid())
+  clinicId    String
+  clinic      Clinic              @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   treatmentId String
-  treatment   Treatment           @relation(fields: [treatmentId], references: [id])
+  treatment   Treatment           @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
   phaseType   String // "PRE" or "POST"
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
+  deletedAt   DateTime?
+  version     Int                 @default(1)
   assessment  ClinicalAssessment?
   image       Image?
   aiResult    AIResult?
+
+  @@index([treatmentId])
+  @@index([clinicId, updatedAt])
 }
 
 model ClinicalAssessment {
   id                 String   @id @default(uuid())
   phaseId            String   @unique
-  phase              Phase    @relation(fields: [phaseId], references: [id])
+  phase              Phase    @relation(fields: [phaseId], references: [id], onDelete: Cascade)
   exudateLevel       String
   exudateType        String?
   infectionSigns     String[]
   painLevel          Int
   edgeCondition      String?
   periwoundCondition String?
-  responses          Json? // answers to admin-added questions: { questionId, title, type, answer }[]
+  responses          Json? // answers to admin-added questions
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -94,48 +194,96 @@ model ClinicalAssessment {
 model Image {
   id        String   @id @default(uuid())
   phaseId   String   @unique
-  phase     Phase    @relation(fields: [phaseId], references: [id])
-  imageUrl  String
+  phase     Phase    @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  imageUrl  String // storage path of the full photo
+  thumbPath String? // storage path of the 320 px thumbnail
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model AIResult {
   id               String    @id @default(uuid())
+  clinicId         String
+  clinic           Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   phaseId          String    @unique
-  phase            Phase     @relation(fields: [phaseId], references: [id])
+  phase            Phase     @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  // processing → ok | retake | no_wound_found | failed. Only `ok` results stay; retakes are deleted with their photo.
+  status           String    @default("processing")
+  error            String?
   area             Float?
   length           Float?
   height           Float?
   majorAxis        Float?
   minorAxis        Float?
   shapeAnalysis    String?
-  tissuePercentage Json? // For Phase 2
+  tissuePercentage Json?
   confidenceScore  Float? // wound-type probability from the model
-  // From the wound-ai model service (wound-ai/api/server.py). area / length / height (= width) above are
-  // copied out of `findings` so the area trend can be queried; `findings` is the full response.
-  findings         Json?
+  findings         Json? // the model service's full response
   intake           Json? // the answers the model was given (no identity)
   draftReport      String?
   modelVersions    Json?
-  modelCaseId      String? // the model service's case_id, sent back with the clinician's review
+  modelCaseId      String?
+  // Review queue fields, kept in step with `review`.
+  reviewStatus     String    @default("pending") // pending | approved | edited | rejected
+  urgent           Boolean   @default(false)
+  flagCount        Int       @default(0)
   review           AIReview?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
+
+  @@index([clinicId, reviewStatus, urgent, createdAt(sort: Desc)])
+  @@index([clinicId, createdAt(sort: Desc)])
 }
 
 // A clinician's decision on an AI draft. One per result; nothing reaches the record unreviewed.
 model AIReview {
   id          String   @id @default(uuid())
   aiResultId  String   @unique
-  aiResult    AIResult @relation(fields: [aiResultId], references: [id])
+  aiResult    AIResult @relation(fields: [aiResultId], references: [id], onDelete: Cascade)
   reviewerId  String
   reviewer    User     @relation(fields: [reviewerId], references: [id])
   decision    String // "approved" | "edited" | "rejected"
-  finalReport String? // the approved or edited text
-  reason      String? // why a draft was rejected
-  corrections Json? // e.g. { woundType: "venous" }, for retraining
+  finalReport String?
+  reason      String?
+  corrections Json?
   createdAt   DateTime @default(now())
+
+  @@index([reviewerId])
+}
+
+// Who did what: sign-in, create/update/delete, review, export, share. Append-only; no patient values.
+model AuditLog {
+  id       String   @id @default(uuid())
+  clinicId String
+  clinic   Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  userId   String?
+  action   String // e.g. patient.create, visit.review, export.patients, share.create
+  entity   String?
+  entityId String?
+  details  Json?
+  at       DateTime @default(now())
+
+  @@index([clinicId, at(sort: Desc)])
+  @@index([entity, entityId])
+}
+
+// Expiring, revocable read-only links to a case report. Only a keyed hash of the token is stored.
+model ShareLink {
+  id           String    @id @default(uuid())
+  clinicId     String
+  clinic       Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  caseId       String
+  case         Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  tokenHash    String    @unique
+  hidePersonal Boolean   @default(true)
+  createdById  String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  lastViewedAt DateTime?
+  viewCount    Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  @@index([caseId, createdAt(sort: Desc)])
 }
 
 // The question catalog admins edit in the web portal (rules: packages/domain/src/lib/questions.ts).
