@@ -3,32 +3,34 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import {
-  missingIntake,
-  type CaseView,
-  type IntakeAnswers,
-  type IntakeQuestion,
-  type VisitOutcome,
-} from "@antigravity-project-spec-pack/domain/wound-model";
+import { useQueryClient } from "@tanstack/react-query";
+import { missingIntake, type IntakeAnswers, type IntakeQuestion } from "@antigravity-project-spec-pack/domain/wound-model";
+import type { VisitView } from "@antigravity-project-spec-pack/domain/api";
 import { Button } from "../../../../../../components/ui/button";
 import { PageNote } from "../../../../../../components/ui/field";
 import { IntakeForm, bodySiteFor } from "../../../../../../components/visit/IntakeForm";
 import { PhotoStep } from "../../../../../../components/visit/PhotoStep";
-import { api, errorMessage, useApi } from "../../../../../../lib/api";
+import { api, errorMessage } from "../../../../../../lib/api";
+import { keys, useCase, useIntakeQuestions } from "../../../../../../lib/queries";
+
+const POLL_MS = 2000;
+const GIVE_UP_MS = 3 * 60_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Photograph a wound, answer the model's questions, and get an AI draft to review. */
 export default function NewVisitPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const woundCase = useApi<CaseView>(`/cases/${id}`);
-  const core = useApi<IntakeQuestion[]>("/model/intake-questions");
+  const qc = useQueryClient();
+  const woundCase = useCase(id);
+  const core = useIntakeQuestions();
 
   const [photo, setPhoto] = useState<Blob | null>(null);
   const [answers, setAnswers] = useState<IntakeAnswers>({});
   const [followUps, setFollowUps] = useState<IntakeQuestion[]>([]);
   const [missing, setMissing] = useState<string[]>([]);
   const [retake, setRetake] = useState<string[]>();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<false | "uploading" | "analysing">(false);
   const [problem, setProblem] = useState<string>();
   const top = useRef<HTMLDivElement>(null);
   const prefilled = useRef(false);
@@ -66,24 +68,37 @@ export default function NewVisitPage() {
     if (!photo) return setProblem("Take a photo of the wound first.");
     if (unanswered.length) return setProblem("Answer the required questions.");
 
-    setBusy(true);
+    setBusy("uploading");
     setProblem(undefined);
     const form = new FormData();
     form.append("photo", photo, "wound.jpg");
     form.append("intake", JSON.stringify(answers));
     try {
-      const outcome = await api<VisitOutcome>(`/cases/${id}/visits`, { method: "POST", body: form });
-      if (outcome.status === "ok" && outcome.visit) {
-        router.push(`/cases/${id}?visit=${outcome.visit.aiResultId}`);
+      let visit = await api<VisitView>(`/cases/${id}/visits`, {
+        method: "POST",
+        body: form,
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      });
+      // The photo is stored; the model analyses it in the background. Wait here so a retake keeps the answers.
+      setBusy("analysing");
+      const started = Date.now();
+      while (visit.status === "processing" && Date.now() - started < GIVE_UP_MS) {
+        await sleep(POLL_MS);
+        visit = await api<VisitView>(`/visits/${visit.id}`);
+      }
+      void qc.invalidateQueries({ queryKey: keys.all() });
+      if (visit.status === "ok" || visit.status === "processing" || visit.status === "failed") {
+        // Still running or failed: the wound's page shows its progress and a Try again button.
+        router.push(`/cases/${id}?visit=${visit.id}`);
         return;
       }
-      // Nothing was saved: show why and ask for another photo. The answers are kept.
+      // Nothing was kept: show why and ask for another photo. The answers stay.
       setRetake(
-        outcome.status === "retake"
-          ? outcome.issues?.length
-            ? outcome.issues
+        visit.status === "retake"
+          ? visit.findings?.quality?.issues?.length
+            ? visit.findings.quality.issues
             : ["The photo could not be used."]
-          : [...(outcome.flags ?? []).map((f) => f.text), "Make sure the whole wound is in the frame, then retake."],
+          : [...(visit.findings?.flags ?? []).map((f) => f.text), "Make sure the whole wound is in the frame, then retake."],
       );
       setPhoto(null);
       top.current?.scrollIntoView({ behavior: "smooth" });
@@ -94,7 +109,7 @@ export default function NewVisitPage() {
     }
   };
 
-  if (woundCase.error) return <PageNote tone="error">{woundCase.error.message}</PageNote>;
+  if (woundCase.error) return <PageNote tone="error">{errorMessage(woundCase.error)}</PageNote>;
 
   return (
     <div ref={top} className="mx-auto flex max-w-2xl flex-col gap-8">
@@ -118,12 +133,12 @@ export default function NewVisitPage() {
       <section className="flex flex-col gap-3">
         <h3 className="text-lg font-semibold">2. Questions</h3>
         <p className="-mt-2 text-sm text-muted-foreground">A photo can't show fever, diabetes or how the wound started; these answers change the assessment.</p>
-        {core.loading ? (
+        {core.isPending ? (
           <PageNote>Loading the questions…</PageNote>
         ) : core.error ? (
           <PageNote tone="error">
-            The wound model isn't available: {core.error.message}{" "}
-            <button type="button" className="underline" onClick={() => void core.reload()}>
+            The wound model isn't available: {errorMessage(core.error)}{" "}
+            <button type="button" className="underline" onClick={() => void core.refetch()}>
               Try again
             </button>
           </PageNote>
@@ -146,10 +161,10 @@ export default function NewVisitPage() {
             {problem}
           </p>
         )}
-        <Button type="button" size="lg" className="self-start" disabled={busy || !core.data} onClick={() => void submit()}>
+        <Button type="button" size="lg" className="self-start" disabled={!!busy || !core.data} onClick={() => void submit()}>
           {busy ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Analysing…
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" /> {busy === "uploading" ? "Uploading…" : "Analysing…"}
             </>
           ) : (
             "Analyse photo"

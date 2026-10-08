@@ -27,9 +27,10 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // getClaims() checks the token's signature locally (the project signs with ES256 and the keys are cached),
+  // so a page load costs no round trip to Supabase unless the token needs refreshing.
+  const { data } = await supabase.auth.getClaims()
+  const user = data?.claims?.sub ? data.claims : null
 
   // Everything except the sign-in page needs a signed-in user: pages redirect to /login, API routes answer 401.
   const path = request.nextUrl.pathname

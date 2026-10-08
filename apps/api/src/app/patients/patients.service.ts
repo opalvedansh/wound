@@ -142,25 +142,30 @@ export class PatientsService {
   }
 
   async get(ctx: ClinicContext, id: string): Promise<PatientDetail> {
-    const p = await this.prisma.patient.findFirst({
-      where: { id, clinicId: ctx.clinicId, deletedAt: null },
-      select: {
-        ...listSelect,
-        mobile: true,
-        location: true,
-        referral: true,
-        notes: true,
-        consent: true,
-      },
-    });
+    // The patient and their wounds load together (both clinic-scoped); the wounds are dropped if the patient isn't found.
+    const [p, rows] = await Promise.all([
+      this.prisma.patient.findFirst({
+        where: { id, clinicId: ctx.clinicId, deletedAt: null },
+        select: {
+          ...listSelect,
+          mobile: true,
+          location: true,
+          referral: true,
+          notes: true,
+          consent: true,
+        },
+      }),
+      ctx.role === 'FRONT_DESK'
+        ? Promise.resolve(null)
+        : this.prisma.case.findMany({
+            where: { patientId: id, clinicId: ctx.clinicId, deletedAt: null },
+            orderBy: [{ closedAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'desc' }],
+          }),
+    ]);
     if (!p) throw new NotFoundException('Patient not found.');
 
     let cases: CaseCard[] | null = null;
-    if (ctx.role !== 'FRONT_DESK') {
-      const rows = await this.prisma.case.findMany({
-        where: { patientId: id, clinicId: ctx.clinicId, deletedAt: null },
-        orderBy: [{ closedAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'desc' }],
-      });
+    if (rows) {
       const latest = await this.latestPhotos(rows.map((r) => r.latestResultId).filter((x): x is string => !!x));
       cases = rows.map((c) => {
         const photo = c.latestResultId ? latest.get(c.latestResultId) : undefined;

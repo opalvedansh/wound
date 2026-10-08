@@ -69,7 +69,7 @@ export function PhotoStep({
           </Button>
         </div>
       ) : (
-        <div className="rounded-2xl border border-black/5 bg-muted/30 p-5 dark:border-white/10">
+        <div className="rounded-2xl border border-black/5 bg-surface-alt p-5 dark:border-white/10">
           <p className="text-sm font-semibold mb-3">Before you take the photo</p>
           <ul className="space-y-3">
             {TIPS.map(({ icon: Icon, text }) => (

@@ -6,11 +6,12 @@ import {
   woundTypeName,
   type ClassResult,
   type Outline,
+  type AnalyzeResponse,
   type ReviewDecision,
-  type ReviewView,
-  type VisitView,
 } from "@antigravity-project-spec-pack/domain/wound-model";
-import { api, errorMessage } from "../../lib/api";
+import type { ReviewView, VisitView } from "@antigravity-project-spec-pack/domain/api";
+import { errorMessage } from "../../lib/api";
+import { useDeleteVisit, useReviewVisit } from "../../lib/queries";
 import { dateTimeText } from "../../lib/format";
 import { Button } from "../ui/button";
 import { fieldClass } from "../ui/field";
@@ -92,29 +93,22 @@ export function ReviewBadge({ review }: { review: ReviewView | null }) {
 }
 
 /** Approve, edit or reject the draft. One decision per result; it is stored with the reviewer and time. */
-function ReviewPanel({ visit, onReviewed }: { visit: VisitView; onReviewed: (review: ReviewView) => void }) {
+function ReviewPanel({ caseId, visit }: { caseId: string; visit: VisitView }) {
   const [mode, setMode] = useState<"choose" | "edit" | "reject">("choose");
   const [text, setText] = useState(visit.draftReport ?? "");
   const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string>();
+  const review = useReviewVisit(caseId, visit.id);
+  const busy = review.isPending;
 
-  const submit = async (decision: ReviewDecision) => {
+  const submit = (decision: ReviewDecision) => {
     if (decision === "edited" && !text.trim()) return setProblem("Write the corrected report.");
     if (decision === "rejected" && !reason.trim()) return setProblem("Say why the draft is rejected.");
-    setBusy(true);
     setProblem(undefined);
-    try {
-      const review = await api<ReviewView>(`/visits/${visit.aiResultId}/review`, {
-        method: "POST",
-        body: JSON.stringify({ decision, finalReport: decision === "edited" ? text : undefined, reason: decision === "rejected" ? reason : undefined }),
-      });
-      onReviewed(review);
-    } catch (e) {
-      setProblem(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
+    review.mutate(
+      { decision, finalReport: decision === "edited" ? text : undefined, reason: decision === "rejected" ? reason : undefined },
+      { onError: (e) => setProblem(errorMessage(e)) },
+    );
   };
 
   return (
@@ -141,7 +135,7 @@ function ReviewPanel({ visit, onReviewed }: { visit: VisitView; onReviewed: (rev
       <div className="mt-3 flex flex-wrap gap-2">
         {mode === "choose" ? (
           <>
-            <Button type="button" size="sm" disabled={busy} onClick={() => void submit("approved")}>
+            <Button type="button" size="sm" disabled={busy} onClick={() => submit("approved")}>
               {busy ? "Saving…" : "Approve draft"}
             </Button>
             <Button type="button" size="sm" variant="outline" onClick={() => setMode("edit")}>
@@ -153,7 +147,7 @@ function ReviewPanel({ visit, onReviewed }: { visit: VisitView; onReviewed: (rev
           </>
         ) : (
           <>
-            <Button type="button" size="sm" disabled={busy} onClick={() => void submit(mode === "edit" ? "edited" : "rejected")}>
+            <Button type="button" size="sm" disabled={busy} onClick={() => submit(mode === "edit" ? "edited" : "rejected")}>
               {busy ? "Saving…" : mode === "edit" ? "Save and approve" : "Reject draft"}
             </Button>
             <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => (setMode("choose"), setProblem(undefined))}>
@@ -167,24 +161,17 @@ function ReviewPanel({ visit, onReviewed }: { visit: VisitView; onReviewed: (rev
 }
 
 /** Deletes the visit and its photo after a confirmation; there is no undo. */
-function DeleteVisit({ visit, onDeleted }: { visit: VisitView; onDeleted: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string>();
-  const remove = async () => {
+export function DeleteVisit({ caseId, visit }: { caseId: string; visit: VisitView }) {
+  const del = useDeleteVisit(caseId);
+  const busy = del.isPending;
+  const problem = del.error ? errorMessage(del.error) : undefined;
+  const remove = () => {
     if (!window.confirm("Delete this visit, its photo and its review? This can't be undone.")) return;
-    setBusy(true);
-    setProblem(undefined);
-    try {
-      await api<void>(`/visits/${visit.aiResultId}`, { method: "DELETE" });
-      onDeleted();
-    } catch (e) {
-      setProblem(errorMessage(e));
-      setBusy(false);
-    }
+    del.mutate(visit.id);
   };
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-black/5 pt-3 dark:border-white/10">
-      <button type="button" disabled={busy} onClick={() => void remove()} className="inline-flex items-center gap-1.5 text-sm font-medium text-destructive hover:underline disabled:opacity-50">
+      <button type="button" disabled={busy} onClick={remove} className="inline-flex items-center gap-1.5 text-sm font-medium text-destructive hover:underline disabled:opacity-50">
         <Trash2 className="w-4 h-4" /> {busy ? "Deleting…" : "Delete visit"}
       </button>
       {problem && (
@@ -197,16 +184,8 @@ function DeleteVisit({ visit, onDeleted }: { visit: VisitView; onDeleted: () => 
 }
 
 /** One analysed photo: flags first, the outlined photo, the findings, the draft, and the review. */
-export function VisitResult({
-  visit,
-  onReviewed,
-  onDeleted,
-}: {
-  visit: VisitView;
-  onReviewed: (review: ReviewView) => void;
-  onDeleted?: () => void;
-}) {
-  const f = visit.findings;
+export function VisitResult({ caseId, visit, canDelete = true }: { caseId: string; visit: VisitView; canDelete?: boolean }) {
+  const f: AnalyzeResponse = visit.findings ?? { status: "ok" }; // shown only once the analysis is done
   const m = f.measurement;
   const change = f.change?.percent_area_reduction;
   const flags = [...(f.flags ?? [])].sort((a, b) => (a.level === b.level ? 0 : a.level === "urgent" ? -1 : 1));
@@ -306,45 +285,10 @@ export function VisitResult({
               </div>
             </details>
           )}
-          <ReviewPanel visit={visit} onReviewed={onReviewed} />
+          <ReviewPanel caseId={caseId} visit={visit} />
         </>
       )}
-      {onDeleted && <DeleteVisit visit={visit} onDeleted={onDeleted} />}
+      {canDelete && <DeleteVisit caseId={caseId} visit={visit} />}
     </div>
-  );
-}
-
-/** Area over time, once at least two visits have a measured size. */
-export function AreaTrend({ visits }: { visits: VisitView[] }) {
-  const points = visits
-    .filter((v) => v.findings.measurement)
-    .map((v) => ({ at: new Date(v.takenAt).getTime(), area: v.findings.measurement!.area_cm2 }))
-    .sort((a, b) => a.at - b.at);
-  if (points.length < 2) return null;
-
-  const [w, h, pad] = [320, 120, 16];
-  const t0 = points[0].at;
-  const span = Math.max(1, points[points.length - 1].at - t0);
-  const max = Math.max(...points.map((p) => p.area));
-  const xy = points.map((p) => [pad + ((p.at - t0) / span) * (w - 2 * pad), h - pad - (p.area / max) * (h - 2 * pad)]);
-  const first = points[0].area;
-  const last = points[points.length - 1].area;
-
-  return (
-    <figure className="rounded-2xl border border-black/10 p-4 dark:border-white/10">
-      <figcaption className="text-sm font-semibold">
-        Wound area: {first} → {last} cm²
-        <span className="ml-2 font-normal text-muted-foreground">
-          ({last <= first ? "down" : "up"} {Math.abs(Math.round(((last - first) / first) * 100))}% over {points.length} measured visits)
-        </span>
-      </figcaption>
-      <svg viewBox={`0 0 ${w} ${h}`} className="mt-2 w-full max-w-md" role="img" aria-label={`Wound area from ${first} to ${last} square centimetres`}>
-        <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="currentColor" strokeOpacity={0.15} />
-        <polyline points={xy.map(([x, y]) => `${x},${y}`).join(" ")} fill="none" stroke="hsl(var(--primary))" strokeWidth={2} />
-        {xy.map(([x, y], i) => (
-          <circle key={i} cx={x} cy={y} r={3.5} fill="hsl(var(--primary))" />
-        ))}
-      </svg>
-    </figure>
   );
 }

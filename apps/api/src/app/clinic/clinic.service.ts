@@ -11,6 +11,9 @@ import { parse, text } from '../platform/validation';
 import { PrismaService } from '../prisma.service';
 import { UsersService } from '../users.service';
 
+const ME_TTL_SECONDS = 120;
+const meCacheKey = (userId: string) => `me:${userId}`;
+
 const ROLE = z.enum(['ADMIN', 'DOCTOR', 'FRONT_DESK']);
 export const inviteInput = z.object({ email: z.string().trim().toLowerCase().email().max(200), role: ROLE, firstName: z.string().trim().max(100).optional(), lastName: z.string().trim().max(100).optional() });
 export const memberUpdate = z.object({ role: ROLE.optional(), active: z.boolean().optional() });
@@ -27,7 +30,10 @@ export class ClinicService {
     private readonly audit: AuditService,
   ) {}
 
+  /** Who is signed in and their clinics. Cached for two minutes; membership changes clear it at once. */
   async me(user: AuthUser): Promise<Me> {
+    const cached = await this.redis.safe((r) => r.get(meCacheKey(user.id)), null);
+    if (cached) return { ...(JSON.parse(cached) as Me), platformAdmin: user.role === 'admin' };
     await this.users.ensure(user);
     const u = await this.prisma.user.findUnique({
       where: { id: user.id },
@@ -37,7 +43,7 @@ export class ClinicService {
         memberships: { where: { active: true }, orderBy: { createdAt: 'asc' }, select: { clinicId: true, role: true, clinic: { select: { name: true } } } },
       },
     });
-    return {
+    const me: Me = {
       id: user.id,
       email: user.email,
       firstName: u?.firstName ?? '',
@@ -45,6 +51,8 @@ export class ClinicService {
       platformAdmin: user.role === 'admin',
       memberships: (u?.memberships ?? []).map((m) => ({ clinicId: m.clinicId, clinicName: m.clinic.name, role: m.role })),
     };
+    await this.redis.safe((r) => r.set(meCacheKey(user.id), JSON.stringify(me), 'EX', ME_TTL_SECONDS), null);
+    return me;
   }
 
   async clinic(ctx: ClinicContext) {
@@ -86,7 +94,13 @@ export class ClinicService {
     const auth = this.supabase.get().auth.admin;
     let userId = await this.prisma.user.findUnique({ where: { email: input.email }, select: { id: true } }).then((u) => u?.id);
     if (!userId) {
-      const { data, error } = await auth.inviteUserByEmail(input.email, { data: { firstName: input.firstName, lastName: input.lastName } });
+      // The email's link opens the portal's sign-in page, which asks the new member to choose a password.
+      // PORTAL_URL must be in Supabase's allowed redirect URLs.
+      const portal = (process.env['PORTAL_URL'] ?? 'http://localhost:3000').replace(/\/+$/, '');
+      const { data, error } = await auth.inviteUserByEmail(input.email, {
+        data: { firstName: input.firstName, lastName: input.lastName },
+        redirectTo: `${portal}/login`,
+      });
       if (error) {
         // Already has an account (e.g. signed up before) but no User row yet: find it.
         const existing = await this.findAuthUser(input.email);
@@ -139,7 +153,7 @@ export class ClinicService {
 
   /** Role changes apply on the next request, not after the membership cache expires. */
   private forget(userId: string) {
-    return this.redis.safe((r) => r.del(membershipCacheKey(userId)), 0);
+    return this.redis.safe((r) => r.del(membershipCacheKey(userId), meCacheKey(userId)), 0);
   }
 
   async auditLog(ctx: ClinicContext, query: { cursor?: unknown; limit?: unknown; action?: unknown }): Promise<Page<AuditItem>> {

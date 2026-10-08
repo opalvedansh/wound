@@ -8,11 +8,8 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async ensure(user: AuthUser): Promise<void> {
-    await this.prisma.user.upsert({
-      where: { id: user.id },
-      update: {},
-      // `email` is unique and required; phone-only accounts get a placeholder that can never receive mail.
-      create: { id: user.id, email: user.email ?? `${user.id}@users.invalid` },
-    });
+    // One INSERT … ON CONFLICT DO NOTHING (an upsert would be a transaction of several round trips).
+    // `email` is unique and required; phone-only accounts get a placeholder that can never receive mail.
+    await this.prisma.user.createMany({ data: [{ id: user.id, email: user.email ?? `${user.id}@users.invalid` }], skipDuplicates: true });
   }
 }

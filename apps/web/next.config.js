@@ -2,8 +2,11 @@
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Next.js options go here
-  // See: https://nextjs.org/docs/app/api-reference/config/next-config-js
+  experimental: {
+    // Import only the icons a page uses instead of the whole icon set.
+    optimizePackageImports: ['lucide-react', '@tanstack/react-query'],
+  },
+  poweredByHeader: false,
 };
 
 module.exports = nextConfig;

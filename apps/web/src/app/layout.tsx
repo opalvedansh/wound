@@ -5,8 +5,8 @@ import './global.css';
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
 export const metadata = {
-  title: 'Wound Care Clinical Portal',
-  description: 'Clinical Portal for Wound Care Management',
+  title: 'Wound Care · Clinic portal',
+  description: 'Wound measurement and review for clinics',
 }
 
 export default function RootLayout({

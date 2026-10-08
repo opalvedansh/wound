@@ -53,11 +53,12 @@ export class CasesService {
   }
 
   async get(ctx: ClinicContext, id: string): Promise<CaseView> {
-    const c = await this.owned(ctx, id);
-    const [visits, series] = await Promise.all([
+    // All three are clinic-scoped, so they run together; nothing is returned unless the wound is found.
+    const [c, visits, series] = await Promise.all([
+      this.owned(ctx, id),
       this.visits(ctx, id, {}),
       this.prisma.aIResult.findMany({
-        where: { status: 'ok', area: { not: null }, phase: { treatment: { caseId: id, deletedAt: null } } },
+        where: { clinicId: ctx.clinicId, status: 'ok', area: { not: null }, phase: { treatment: { caseId: id, deletedAt: null } } },
         orderBy: { createdAt: 'asc' },
         select: { area: true, createdAt: true, phase: { select: { treatment: { select: { sequence: true } } } } },
       }),

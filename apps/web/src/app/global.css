@@ -1,45 +1,137 @@
-@import "tailwindcss";
-@config "../../tailwind.config.js";
+@import 'tailwindcss';
 
-@layer base {
-  :root {
-    --background: 210 40% 98%;
-    --foreground: 222 47% 11%;
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 224 64% 33%; /* Deep Cobalt */
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222 47.4% 11.2%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 224 64% 33%;
-    --radius: 1rem; /* Up from 0.5rem for softer, modern squircle */
-    
-    --shadow-double-bezel: 0 0 0 1px rgba(0,0,0,0.05), 0 1px 2px 0 rgba(0,0,0,0.05), inset 0 1px 0 0 rgba(255,255,255,0.5);
+/* Design tokens: warm neutrals, one teal accent, and a colour per wound status (from the WoundMetrics portal). */
+:root {
+  color-scheme: light;
+  --bg: #f7f7f4;
+  --surface: #ffffff;
+  --surface-alt: #efefeb;
+  --ink: #111418;
+  --ink-soft: #3a3f45;
+  --muted: #6f757c;
+  --faint: #a9aeb3;
+  --hairline: #e4e4df;
+  --accent: #0f6e66;
+  --accent-hover: #0b5a53;
+  --accent-soft: #e2efec;
+  --on-accent: #ffffff;
+  --healing: #2e7d4f;
+  --healing-soft: #e3f1e8;
+  --review: #a86400;
+  --review-soft: #faefd9;
+  --overdue: #c23b22;
+  --overdue-soft: #fbe5df;
+  /* Chart marks */
+  --viz-1: #0a8a7a;
+  --viz-neg: #c8642a;
+  --viz-grid: #ecece7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) {
+    color-scheme: dark;
+    --bg: #0b0d0e;
+    --surface: #151819;
+    --surface-alt: #1d2122;
+    --ink: #f2f2ee;
+    --ink-soft: #c9cccf;
+    --muted: #8a9096;
+    --faint: #5c6267;
+    --hairline: #262a2c;
+    --accent: #43b9a9;
+    --accent-hover: #5ccabb;
+    --accent-soft: #12302d;
+    --on-accent: #04201c;
+    --healing: #5cc28a;
+    --healing-soft: #13291d;
+    --review: #e6a93f;
+    --review-soft: #2e2311;
+    --overdue: #f0715a;
+    --overdue-soft: #33150f;
+    --viz-1: #1e9c8b;
+    --viz-neg: #d46a2e;
+    --viz-grid: #22272a;
   }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-hairline: var(--hairline);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-healing: var(--healing);
+  --color-healing-soft: var(--healing-soft);
+  --color-review: var(--review);
+  --color-review-soft: var(--review-soft);
+  --color-overdue: var(--overdue);
+  --color-overdue-soft: var(--overdue-soft);
+
+  /* Older names still used by the visit and question components, mapped onto the same palette. */
+  --color-background: var(--bg);
+  --color-foreground: var(--ink);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--ink);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--on-accent);
+  --color-secondary: var(--surface-alt);
+  --color-secondary-foreground: var(--ink);
+  --color-muted-foreground: var(--muted);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--overdue);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--hairline);
+  --color-input: var(--hairline);
+  --color-ring: var(--accent);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
   * {
-    border-color: hsl(var(--border));
+    border-color: var(--hairline);
+  }
+  html,
+  body {
+    background: var(--bg);
+    color: var(--ink);
   }
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
+    font-feature-settings: 'cv11', 'ss01';
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: "rlig" 1, "calt" 1;
   }
-  .tabular-measurements {
-    font-variant-numeric: tabular-nums;
+  ::selection {
+    background: var(--accent-soft);
+  }
+}
+
+.tabular,
+.tabular-measurements {
+  font-variant-numeric: tabular-nums;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  html,
+  body {
+    background: #fff;
+  }
+  .print-full {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  .print-break-avoid {
+    break-inside: avoid;
   }
 }
