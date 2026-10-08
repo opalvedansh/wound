@@ -1,20 +1,24 @@
 import { useMemo } from 'react';
 import type { SyncState } from '@antigravity-project-spec-pack/domain';
+import { pendingCount } from '@antigravity-project-spec-pack/domain/sync';
 import { useVisitStore } from '../store/useVisitStore';
-
-// syncManager stops retrying an outbox item once its retryCount passes 3.
-export const STALLED_AFTER_RETRIES = 3;
+import { STALLED_AFTER } from './syncManager';
 
 export type SyncIssue = 'pending' | 'failed' | null;
 
-/** Outbox items the sync engine has given up on, plus the ids of the records they belong to. */
+/** Records and photos that keep failing to sync (they are still retried), and the ids of their records. */
 export const useStalledSync = () => {
-  const outbox = useVisitStore((state) => state.outbox);
+  const failures = useVisitStore((state) => state.failures);
   return useMemo(() => {
-    const items = outbox.filter((item) => item.retryCount > STALLED_AFTER_RETRIES);
+    const items = Object.entries(failures)
+      .filter(([, f]) => f.attempts >= STALLED_AFTER)
+      .map(([key, f]) => ({ entityId: key.split(':')[0], ...f }));
     return { items, ids: new Set(items.map((item) => item.entityId)) };
-  }, [outbox]);
+  }, [failures]);
 };
+
+/** How many records are waiting to be sent. */
+export const usePendingCount = () => pendingCount(useVisitStore((state) => state.outbox));
 
 export const syncIssueFor = (id: string, syncState: SyncState, stalledIds: Set<string>): SyncIssue =>
   stalledIds.has(id) ? 'failed' : syncState === 'pending' ? 'pending' : null;

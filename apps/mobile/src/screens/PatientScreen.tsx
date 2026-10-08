@@ -34,6 +34,7 @@ import {
 import { focusStyles, interactionStyle } from '../lib/interaction';
 import { syncIssueFor, useStalledSync, type SyncIssue } from '../lib/syncStatus';
 import { breakpoints, colors, radii, spacing } from '../lib/theme';
+import { postPhoto, prePhoto } from '../lib/photos';
 import { useVisitStore } from '../store/useVisitStore';
 
 type ParamList = {
@@ -78,13 +79,13 @@ const buildCaseRows = (cases: Case[], treatments: Treatment[], stalledIds: Set<s
 
   return ordered.map(({ item, number }) => {
     const visits = treatments.filter((t) => t.caseId === item.id).sort(newestFirst);
-    const imaged = visits.find((t) => t.postImageUri || t.preImageUri);
+    const imaged = visits.find((t) => postPhoto(t) || prePhoto(t));
     const planned = visits.find((t) => t.therapy?.nextVisitDate);
     const onset = parseDay(item.onsetDate);
     return {
       item,
       number,
-      thumbnailUri: imaged?.postImageUri ?? imaged?.preImageUri,
+      thumbnailUri: postPhoto(imaged) ?? prePhoto(imaged),
       woundType: visits.find((t) => t.assessment?.woundType)?.assessment?.woundType,
       status: caseStatus(item, visits, now),
       trend: visits[0]?.assessment?.woundAppearanceTrend,

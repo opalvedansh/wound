@@ -166,6 +166,54 @@ export class VisitsService implements OnModuleInit {
     return this.view(ctx, visitId);
   }
 
+  /**
+   * A photo the mobile app took for a treatment it has already synced. The pre-treatment photo is analysed like
+   * a portal visit; the post-treatment photo is kept for the record. Sending the same photo again is harmless.
+   */
+  async attachSyncedPhoto(
+    ctx: ClinicContext,
+    treatmentId: string,
+    phaseType: 'PRE' | 'POST',
+    photo: PhotoUpload | undefined,
+    intake: IntakeAnswers,
+  ): Promise<{ visitId: string | null }> {
+    const t = await this.prisma.treatment.findFirst({
+      where: { id: treatmentId, clinicId: ctx.clinicId, deletedAt: null },
+      select: { id: true, phases: { where: { phaseType }, select: { id: true, image: { select: { phaseId: true } }, aiResult: { select: { id: true } } } } },
+    });
+    if (!t) throw new NotFoundException('Treatment not found. Sync it first.');
+    const existing = t.phases[0];
+    if (existing?.image) return { visitId: existing.aiResult?.id ?? null };
+    if (!photo) throw new BadRequestException('Add a photo of the wound.');
+    if (photo.size > MAX_PHOTO_BYTES) throw new PayloadTooLargeException('The photo is larger than 15 MB.');
+    const type = imageType(photo.buffer);
+    if (!type) throw new BadRequestException('The photo must be a JPEG or PNG image.');
+
+    const path = `${ctx.clinicId}/treatments/${t.id}/${phaseType.toLowerCase()}.${type === 'image/png' ? 'png' : 'jpg'}`;
+    await this.storage.upload(path, photo.buffer, type);
+    let visitId: string | null = null;
+    try {
+      visitId = await this.prisma.$transaction(async (tx) => {
+        const phaseId = existing?.id ?? (await tx.phase.create({ data: { clinicId: ctx.clinicId, treatmentId: t.id, phaseType }, select: { id: true } })).id;
+        await tx.image.create({ data: { phaseId, imageUrl: path } });
+        if (phaseType !== 'PRE') return null;
+        const result = await tx.aIResult.create({
+          data: { clinicId: ctx.clinicId, phaseId, status: 'processing', intake: intake as Prisma.InputJsonValue },
+          select: { id: true },
+        });
+        return result.id;
+      });
+    } catch (error) {
+      await this.storage.remove(path);
+      throw error;
+    }
+    if (visitId) {
+      await this.jobs.enqueue('analyze-visit', { visitId }, { jobId: `analyze-${visitId}` });
+      await this.audit.log({ clinicId: ctx.clinicId, userId: ctx.userId, action: 'visit.create', entity: 'AIResult', entityId: visitId, details: { from: 'app' } });
+    }
+    return { visitId };
+  }
+
   /** Runs a failed analysis again (e.g. the model was asleep or down). */
   async retry(ctx: ClinicContext, id: string): Promise<VisitView> {
     const row = await this.prisma.aIResult.findFirst({ where: { id, clinicId: ctx.clinicId }, select: { status: true } });
@@ -174,6 +222,11 @@ export class VisitsService implements OnModuleInit {
     await this.prisma.aIResult.update({ where: { id }, data: { status: 'processing', error: null } });
     await this.jobs.enqueue('analyze-visit', { visitId: id }, { jobId: `analyze-${id}-${Date.now()}` });
     return this.view(ctx, id);
+  }
+
+  /** Marks the visit's treatment changed, so the mobile app's next pull brings the new result. */
+  private touch(visitId: string) {
+    return this.prisma.treatment.updateMany({ where: { phases: { some: { aiResult: { id: visitId } } } }, data: { version: { increment: 1 } } });
   }
 
   /** Background job: the model analyses the stored photo. */
@@ -207,7 +260,7 @@ export class VisitsService implements OnModuleInit {
         where: { id: visitId },
         data: { error: message.slice(0, 300), ...(meta.final ? { status: 'failed' } : {}) },
       });
-      if (meta.final) return;
+      if (meta.final) return void (await this.touch(visitId));
       throw error;
     }
 
@@ -218,6 +271,7 @@ export class VisitsService implements OnModuleInit {
         this.prisma.image.deleteMany({ where: { phaseId: row.phase.id } }),
       ]);
       await this.storage.remove(path);
+      await this.touch(visitId);
       return;
     }
 
@@ -240,7 +294,7 @@ export class VisitsService implements OnModuleInit {
         flagCount: flags.length,
       },
     });
-    await this.summary.refreshCase(caseId);
+    await Promise.all([this.summary.refreshCase(caseId), this.touch(visitId)]);
     await this.jobs.enqueue('thumbnail', { visitId });
   }
 
@@ -257,7 +311,7 @@ export class VisitsService implements OnModuleInit {
     const thumbPath = image.imageUrl.replace(/\.(jpg|png)$/, '.thumb.jpg');
     await this.storage.upload(thumbPath, thumb, 'image/jpeg');
     await this.prisma.image.update({ where: { phaseId: row.phase.id }, data: { thumbPath } });
-    await this.cache.bump(row.clinicId);
+    await Promise.all([this.cache.bump(row.clinicId), this.touch(visitId)]);
   }
 
   async review(ctx: ClinicContext, id: string, raw: unknown): Promise<ReviewView> {
@@ -296,6 +350,7 @@ export class VisitsService implements OnModuleInit {
     await Promise.all([
       this.jobs.enqueue('forward-review', { visitId: id }),
       this.cache.bump(ctx.clinicId),
+      this.touch(id),
       this.audit.log({ clinicId: ctx.clinicId, userId: ctx.userId, action: 'visit.review', entity: 'AIResult', entityId: id, details: { decision: input.decision } }),
     ]);
     return toReviewView(review);

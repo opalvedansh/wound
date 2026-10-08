@@ -34,6 +34,8 @@ import { ShareService } from './share/share.service';
 import { UsersService } from './users.service';
 import { ModelClient } from './visits/model-client';
 import { StorageService } from './visits/storage.service';
+import { SyncController } from './sync/sync.controller';
+import { SyncService } from './sync/sync.service';
 import { VisitsController } from './visits/visits.controller';
 import { VisitsService } from './visits/visits.service';
 
@@ -57,6 +59,7 @@ import { VisitsService } from './visits/visits.service';
     PatientsController,
     CasesController,
     VisitsController,
+    SyncController,
     DashboardController,
     ExportsController,
     SharePublicController,
@@ -77,6 +80,7 @@ import { VisitsService } from './visits/visits.service';
     PatientsService,
     CasesService,
     VisitsService,
+    SyncService,
     DashboardService,
     ClinicService,
     ExportsService,

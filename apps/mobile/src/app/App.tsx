@@ -2,7 +2,10 @@ import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ActivityIndicator, View } from 'react-native';
 import { startSyncEngine } from '../lib/syncManager';
+import { restoreSession } from '../lib/session';
+import { colors } from '../lib/theme';
 
 import { LoginScreen } from '../screens/LoginScreen';
 import { PatientListScreen } from '../screens/PatientListScreen';
@@ -31,15 +34,27 @@ import { TherapyTrackingScreen } from '../screens/TherapyTrackingScreen';
 const Stack = createNativeStackNavigator();
 
 export const App = () => {
+  // Signed in already (works offline with the last known clinic), or straight to sign-in.
+  const [start, setStart] = React.useState<'Login' | 'PatientList' | null>(null);
   React.useEffect(() => {
-    // Start background sync polling when the app loads
-    startSyncEngine();
+    void restoreSession().then((me) => {
+      setStart(me ? 'PatientList' : 'Login');
+      startSyncEngine();
+    });
   }, []);
+
+  if (!start) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+        <ActivityIndicator color={colors.accent} />
+      </View>
+    );
+  }
 
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <Stack.Navigator initialRouteName="Login" screenOptions={{ headerShown: false }}>
+        <Stack.Navigator initialRouteName={start} screenOptions={{ headerShown: false }}>
           {/* M01 Login */}
           <Stack.Screen name="Login" component={LoginScreen} />
           

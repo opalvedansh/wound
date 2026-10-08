@@ -10,6 +10,7 @@ import { FormLayout } from '../components/FormLayout';
 import { Text } from '../components/Typography';
 import { ageFrom, sentenceCase } from '../lib/format';
 import { colors, spacing } from '../lib/theme';
+import { postPhoto, prePhoto } from '../lib/photos';
 import { useVisitStore } from '../store/useVisitStore';
 
 type ParamList = {
@@ -75,7 +76,7 @@ export const ReportBuilderScreen = () => {
         await Promise.all(
           selected.flatMap((t) =>
             (['pre', 'post'] as const).map(async (phase) => {
-              const src = await photoSource(phase === 'pre' ? t.preImageUri : t.postImageUri);
+              const src = await photoSource(phase === 'pre' ? prePhoto(t) : postPhoto(t));
               if (src) photos.set(`${t.id}:${phase}`, src);
             }),
           ),

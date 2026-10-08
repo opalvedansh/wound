@@ -191,6 +191,64 @@ async function main() {
   check('...removes its photo and thumbnail', (photos.data ?? []).length === 0);
   check('deleting the patient', (await call(adminA, `/patients/${patientId}`, { method: 'DELETE' })).status === 204);
   check('...and it is gone from lists', (await call(adminA, `/patients/${patientId}`)).status === 404);
+
+  // Mobile sync: two devices, offline edits, photos
+  const sid = () => crypto.randomUUID();
+  const push = (who, changes) => call(who, '/sync/push', { method: 'POST', body: json({ deviceId: 'e2e', changes }) });
+  const pullAll = async (who, since) => {
+    const out = { patients: [], cases: [], treatments: [], deleted: [] };
+    let cursor = null;
+    let serverTime;
+    do {
+      const r = await call(who, `/sync/pull?since=${encodeURIComponent(since ?? '')}${cursor ? `&cursor=${cursor}` : ''}`);
+      for (const e of ['patients', 'cases', 'treatments']) {
+        out[e].push(...r.body.changes[e].upserted);
+        out.deleted.push(...r.body.changes[e].deleted);
+      }
+      cursor = r.body.cursor;
+      serverTime = r.body.serverTime;
+    } while (cursor);
+    return { ...out, serverTime };
+  };
+  const mp = { id: sid(), firstName: 'Sync', lastName: 'Patient', patientId: 'MRN-77', sex: 'F', dob: '1958-03-02', location: 'Ward 2', consent: { care: true, aiTraining: false, noticeVersion: 'dpdp-1', recordedAt: new Date().toISOString() } };
+  const mc = { id: sid(), patientId: mp.id, onsetDate: '2026-09-20', woundLocation: 'Right heel', status: 'IN_TREATMENT', createdAt: new Date().toISOString() };
+  const mt = {
+    id: sid(), caseId: mc.id, sequenceNumber: 1, phase: 'POST', createdAt: new Date().toISOString(),
+    assessment: { woundType: 'Pressure injury', exudateLevel: 'Low', exudateType: 'Serous', infectionSigns: [], pain: 3, edgeCondition: '', periwoundCondition: '', comorbidities: ['Diabetes'] },
+  };
+  const first = await push(doctorA, {
+    patients: { upserted: [{ record: mp, changed: Object.keys(mp) }], deleted: [] },
+    cases: { upserted: [{ record: mc, changed: Object.keys(mc) }], deleted: [] },
+    treatments: { upserted: [{ record: mt, changed: Object.keys(mt) }], deleted: [] },
+  });
+  check('app pushes a patient, wound and treatment in one go', first.status === 201 && first.body.rejected.length === 0, json(first.body.rejected));
+  const dup = { ...mp, id: sid(), firstName: 'Other' };
+  await push(doctorA, { patients: { upserted: [{ record: dup, changed: Object.keys(dup) }], deleted: [] } });
+  check('a duplicate patient code from another device gets a suffix', (await call(doctorA, `/patients/${dup.id}`)).body.patientId === 'MRN-77-2');
+  const syncPhoto = new FormData();
+  syncPhoto.append('photo', new Blob([photo], { type: photoType }), 'pre.jpg');
+  const up = await call(doctorA, `/sync/treatments/${mt.id}/photos/pre`, { method: 'POST', body: syncPhoto });
+  check('app uploads the pre-treatment photo; analysis starts', up.status === 201 && !!up.body.visitId);
+  const analysed = await until(async () => {
+    const v = await call(doctorA, `/visits/${up.body.visitId}`);
+    return v.body.status !== 'processing' ? v.body : null;
+  });
+  check('...analysed with answers taken from the app (diabetes + heel → diabetic foot rule)', analysed?.status === 'ok' && analysed?.intake?.diabetes === 'yes' && analysed?.intake?.body_location === 'heel');
+  const deviceB = await pullAll(doctorA, null);
+  const pulledT = deviceB.treatments.find((t) => t.id === mt.id);
+  check('a second device pulls everything, with the AI result and photo link', !!deviceB.patients.find((p) => p.id === mp.id) && pulledT?.remote?.ai?.status === 'ok' && !!pulledT?.remote?.preUrl && pulledT?.assessment?.pain === 3);
+  check('the app-made visit shows in the portal', (await call(doctorA, `/cases/${mc.id}`)).body.visitCount === 1);
+  // Two devices edit different fields of the same patient offline: both edits survive.
+  await push(doctorA, { patients: { upserted: [{ record: { ...mp, firstName: 'Edited' }, changed: ['firstName'] }], deleted: [] } });
+  await push(doctorA, { patients: { upserted: [{ record: { ...mp, location: 'Ward 9' }, changed: ['location'] }], deleted: [] } });
+  const merged = await call(doctorA, `/patients/${mp.id}`);
+  check('field-level merge keeps both devices\' edits', merged.body.firstName === 'Edited' && merged.body.location === 'Ward 9');
+  const later = await pullAll(doctorA, deviceB.serverTime);
+  check('incremental pull returns only what changed', later.patients.some((p) => p.id === mp.id) && !later.patients.some((p) => p.firstName === 'Bulk0'), `${later.patients.length} patient(s)`);
+  check('the front desk cannot push clinical records', (await push(frontA, { cases: { upserted: [{ record: { ...mc, woundLocation: 'X' }, changed: ['woundLocation'] }], deleted: [] } })).body.rejected.length === 1);
+  await push(doctorA, { treatments: { upserted: [], deleted: [mt.id] } });
+  check('a delete wins over a later edit from another device', (await push(doctorA, { treatments: { upserted: [{ record: { ...mt, phase: 'COMPLETED' }, changed: ['phase'] }], deleted: [] } })).body.rejected[0]?.reason?.includes('deleted'));
+  check('...and other devices pull the delete', (await pullAll(doctorA, deviceB.serverTime)).deleted.includes(mt.id));
 }
 
 main()

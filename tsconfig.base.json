@@ -30,6 +30,9 @@
       "@antigravity-project-spec-pack/domain/wound-model": [
         "./packages/domain/src/lib/woundModel.ts"
       ],
+      "@antigravity-project-spec-pack/domain/sync": [
+        "./packages/domain/src/lib/sync.ts"
+      ],
       "@antigravity-project-spec-pack/domain/questions": [
         "./packages/domain/src/lib/questions.ts"
       ]

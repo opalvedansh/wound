@@ -24,6 +24,7 @@ import {
   timeAgo,
 } from '../lib/format';
 import { interactionStyle } from '../lib/interaction';
+import { aiSummary, postPhoto, prePhoto } from '../lib/photos';
 import { answerText } from '../lib/questionAnswers';
 import { useQuestionCatalog } from '../lib/questionCatalog';
 import { useStalledSync } from '../lib/syncStatus';
@@ -110,9 +111,7 @@ export const TreatmentDetailScreen = () => {
       : undefined,
   );
   // Treatments have no sync state of their own; one is waiting while it's still in the outbox.
-  const queued = useVisitStore((state) =>
-    state.outbox.some((item) => item.type === 'TREATMENT' && item.entityId === treatmentId),
-  );
+  const queued = useVisitStore((state) => !!state.outbox.treatments[treatmentId]);
   const stalled = useStalledSync();
   const catalog = useQuestionCatalog((state) => state.questions);
 
@@ -176,6 +175,7 @@ export const TreatmentDetailScreen = () => {
   // The next visit and the trend are already in the fact strip.
   const care = recordedAnswers(catalog, 'care', therapy, therapy?.responses, ['nextVisitDate']);
   const findings = recordedAnswers(catalog, 'assessment', assessment, assessment?.responses, ['woundAppearanceTrend']);
+  const ai = aiSummary(treatment);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
@@ -205,12 +205,19 @@ export const TreatmentDetailScreen = () => {
           <View style={styles.phases}>
             <PhaseImage
               phase="pre"
-              uri={treatment.preImageUri}
+              uri={prePhoto(treatment)}
               due={treatment.phase === 'PRE'}
               note={carriedFrom !== undefined ? `Carried forward from treatment ${carriedFrom}` : undefined}
             />
-            <PhaseImage phase="post" uri={treatment.postImageUri} due={treatment.phase === 'POST'} />
+            <PhaseImage phase="post" uri={postPhoto(treatment)} due={treatment.phase === 'POST'} />
           </View>
+
+          {ai && (
+            <>
+              <SectionHeader title="AI draft" note="For a clinician to review" />
+              <DetailList rows={ai} />
+            </>
+          )}
 
           <SectionHeader title="Care provided" />
           {therapy ? (

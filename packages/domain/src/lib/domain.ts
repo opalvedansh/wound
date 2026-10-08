@@ -71,17 +71,38 @@ export interface Case {
   createdAt: string;
 }
 
+/** What the server knows about a treatment's photos and their AI analysis (set by sync, never sent up). */
+export interface TreatmentRemote {
+  /** The photo is stored on the server (uploaded from this or another device). */
+  preStored?: boolean;
+  postStored?: boolean;
+  /** Signed links to the stored photos, for devices that don't have them locally. Valid for a few hours. */
+  preUrl?: string | null;
+  postUrl?: string | null;
+  /** The AI draft for the pre-treatment photo. */
+  ai?: {
+    visitId: string;
+    status: 'processing' | 'ok' | 'retake' | 'no_wound_found' | 'failed';
+    areaCm2: number | null;
+    woundType: string | null;
+    urgent: boolean;
+    review: 'approved' | 'edited' | 'rejected' | null;
+  } | null;
+}
+
 export interface Treatment {
   id: string;
   caseId: string;
   sequenceNumber: number;
   phase: 'PRE' | 'POST' | 'COMPLETED';
+  /** Photos on this device (file or blob URIs); they never leave it except as the uploaded photo. */
   preImageUri?: string;
   postImageUri?: string;
   imageMetadata?: ImageMetadata;
   assessment?: RevisitAssessment;
   therapy?: TherapyDetails;
   createdAt: string;
+  remote?: TreatmentRemote;
 }
 
 export interface AIResult {

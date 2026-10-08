@@ -57,7 +57,7 @@ export const updatePatient = z.object({
   notes: z.string().trim().max(2000).nullable().optional(),
 });
 
-const searchTextOf = (p: { firstName: string; lastName: string; patientId: string }) =>
+export const searchTextOf = (p: { firstName: string; lastName: string; patientId: string }) =>
   `${p.firstName} ${p.lastName} ${p.patientId}`.toLowerCase();
 
 const listSelect = {

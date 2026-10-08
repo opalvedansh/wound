@@ -38,7 +38,7 @@ import {
   type Trend,
 } from '../lib/format';
 import { focusStyles, interactionStyle, webInputReset } from '../lib/interaction';
-import { syncIssueFor, useStalledSync, type SyncIssue } from '../lib/syncStatus';
+import { syncIssueFor, usePendingCount, useStalledSync, type SyncIssue } from '../lib/syncStatus';
 import { breakpoints, colors, radii, spacing } from '../lib/theme';
 import { useVisitStore } from '../store/useVisitStore';
 
@@ -186,7 +186,7 @@ export const PatientListScreen = () => {
   const patients = useVisitStore((state) => state.patients);
   const cases = useVisitStore((state) => state.cases);
   const treatments = useVisitStore((state) => state.treatments);
-  const outbox = useVisitStore((state) => state.outbox);
+  const pending = usePendingCount();
   const [query, setQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
 
@@ -197,7 +197,7 @@ export const PatientListScreen = () => {
   const visible = normalizedQuery ? rows.filter((row) => matches(row, normalizedQuery)) : rows;
   const hasPatients = hydrated && patients.length > 0;
   const sync = describeSync(
-    outbox.length - stalled.items.length,
+    Math.max(0, pending - stalled.items.length),
     stalled.items.length,
     isConnected === false,
     patients.length > 0,

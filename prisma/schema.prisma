@@ -186,6 +186,7 @@ model ClinicalAssessment {
   painLevel          Int
   edgeCondition      String?
   periwoundCondition String?
+  trend              String? // Improving | Static | Deteriorating (revisits)
   responses          Json? // answers to admin-added questions
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

@@ -23,6 +23,7 @@ import {
 import { focusStyles, interactionStyle } from '../lib/interaction';
 import { syncIssueFor, useStalledSync } from '../lib/syncStatus';
 import { colors, radii, spacing } from '../lib/theme';
+import { postPhoto, prePhoto } from '../lib/photos';
 import { useVisitStore } from '../store/useVisitStore';
 
 type ParamList = {
@@ -297,8 +298,8 @@ const TreatmentRow = ({
         <Text style={[styles.rowStatus, !done && styles.rowStatusOpen]}>{done ? 'Completed' : 'In progress'}</Text>
 
         <View style={styles.phases}>
-          <PhaseTile phase="pre" uri={t.preImageUri} due={t.phase === 'PRE'} />
-          <PhaseTile phase="post" uri={t.postImageUri} due={t.phase === 'POST'} />
+          <PhaseTile phase="pre" uri={prePhoto(t)} due={t.phase === 'PRE'} />
+          <PhaseTile phase="post" uri={postPhoto(t)} due={t.phase === 'POST'} />
         </View>
 
         {(trend !== undefined || nextVisit !== null) && (

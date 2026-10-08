@@ -101,6 +101,7 @@ function setup(options: { transactionFails?: boolean; result?: unknown; job?: un
     },
     aIReview: { create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...data, createdAt: new Date('2026-10-08T11:00:00Z') })) },
     image: { deleteMany: jest.fn(async () => ({ count: 1 })) },
+    treatment: { updateMany: jest.fn(async () => ({ count: 1 })) },
   };
   const model = {
     questions: jest.fn(async () => CORE),
